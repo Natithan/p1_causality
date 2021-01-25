@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<module type="PYTHON_MODULE" version="4">
+  <component name="NewModuleRootManager">
+    <content url="file://$MODULE_DIR$" />
+    <orderEntry type="jdk" jdkName="BUATEST SAURON Remote Python 3.8.5 (sftp://nathan@sauron.cs.kuleuven.be:22/cw/liir/NoCsBack/testliir/nathan/miniconda3/envs/buatest/bin/python3.8)" jdkType="Python SDK" />
+    <orderEntry type="sourceFolder" forTests="false" />
+  </component>
+  <component name="TemplatesService">
+    <option name="TEMPLATE_CONFIGURATION" value="Jinja2" />
+    <option name="TEMPLATE_FOLDERS">
+      <list>
+        <option value="$MODULE_DIR$/apex/docs/source/_templates" />
+      </list>
+    </option>
+  </component>
+</module>
