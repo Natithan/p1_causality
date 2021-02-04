@@ -16,13 +16,14 @@ import sys
 import pandas as pd
 import zlib
 import base64
-ROOT_DIR = "/cw/liir/NoCsBack/testliir/nathan"
+ROOT_DIR = "/cw/liir/NoCsBack/testliir/nathan/p1_causality"
 csv.field_size_limit(sys.maxsize)
 
 
 def open_tsv(fname, folder):
     print("Opening %s Data File..." % fname)
-    df = pd.read_csv(fname, sep='\t', names=["caption","url"], usecols=range(0,2),nrows=200) #Nathan edited
+    df = pd.read_csv(fname, sep='\t', names=["caption","url"], usecols=range(0,2))
+    # df = pd.read_csv(fname, sep='\t', names=["caption","url"], usecols=range(0,2),nrows=200) #Nathan edited
     df['folder'] = folder
     print("Processing", len(df), " Images:")
     return df
@@ -94,6 +95,6 @@ if __name__ == '__main__':
     corpus_path = Path(ROOT_DIR,'buatest','features')
     ds = Conceptual_Caption(corpus_path)
     #TODO check the size on this
-    ds1 = PrefetchDataZMQ(ds, nr_proc=1)
-    LMDBSerializer.save(ds1, str(Path(ROOT_DIR,'DeVLBert','features_lmdb/CC/training_feat_all.lmdb')))
+    # ds1 = PrefetchDataZMQ(ds, nr_proc=1)
+    # LMDBSerializer.save(ds1, str(Path(ROOT_DIR,'DeVLBert','features_lmdb/CC/training_feat_all.lmdb')))
     # LMDBSerializer.save(ds1, '/mnt3/yangan.ya/features_lmdb/CC/training_feat_all.lmdb')

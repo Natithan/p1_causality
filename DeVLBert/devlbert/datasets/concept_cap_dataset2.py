@@ -1,4 +1,6 @@
 import copy
+from pathlib import Path
+
 import json
 import logging
 import os
@@ -14,6 +16,7 @@ from torch.utils.data.sampler import Sampler
 import torch.distributed as dist
 import sys
 import pdb
+ROOT_FOLDER = "/cw/liir/NoCsBack/testliir/nathan/p1_causality/
 REGION_LEN = 84
 # REGION_LEN = 36
 logging.basicConfig(
@@ -126,9 +129,9 @@ class ConceptCapLoaderTrain(object):
         else:
             # lmdb_file = "/coc/dataset/conceptual_caption/training_feat_all.lmdb"
             # if not os.path.exists(lmdb_file):
-            lmdb_file = "/cw/liir/NoCsBack/testliir/nathan/DeVLBert/features_lmdb/CC/training_feat_all.lmdb"
+            lmdb_file = Path(ROOT_FOLDER,"DeVLBert/features_lmdb/CC/training_feat_all.lmdb").as_posix()
 
-        caption_path = "/cw/liir/NoCsBack/testliir/nathan/DeVLBert/features_lmdb/CC/caption_train.json"
+        caption_path = Path(ROOT_FOLDER,"DeVLBert/features_lmdb/CC/caption_train.json").as_posix()
 
         print("Loading from %s" % lmdb_file)
 

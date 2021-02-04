@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <project version="4">
-  <component name="PublishConfigData" serverName="shared" remoteFilesAllowedToDisappearOnAutoupload="false">
+  <component name="PublishConfigData" autoUpload="Always" serverName="shared" remoteFilesAllowedToDisappearOnAutoupload="false">
     <serverData>
       <paths name="Copy of project-level server 'arwen'">
         <serverdata>
@@ -19,7 +19,9 @@
       <paths name="Copy of project-level server 'frodo'">
         <serverdata>
           <mappings>
-            <mapping local="$PROJECT_DIR$" web="/" />
+            <mapping deploy="/p1_causality" local="$PROJECT_DIR$" web="/" />
+            <mapping deploy="/p1_causality/DeVLBert" local="$PROJECT_DIR$/DeVLBert" web="/" />
+            <mapping deploy="/p1_causality/buatest" local="$PROJECT_DIR$/buatest" web="/" />
           </mappings>
         </serverdata>
       </paths>
@@ -145,13 +147,14 @@
       <paths name="shared">
         <serverdata>
           <mappings>
-            <mapping deploy="/" local="$PROJECT_DIR$" web="/" />
-            <mapping deploy="/DeVLBert" local="$PROJECT_DIR$/DeVLBert" web="/" />
-            <mapping deploy="/buatest" local="$PROJECT_DIR$/buatest" web="/" />
-            <mapping deploy="/VC-R-CNN" local="$PROJECT_DIR$/VC-R-CNN" web="/" />
+            <mapping deploy="/p1_causality" local="$PROJECT_DIR$" web="/" />
+            <mapping deploy="/p1_causality/DeVLBert" local="$PROJECT_DIR$/DeVLBert" web="/" />
+            <mapping deploy="/p1_causality/buatest" local="$PROJECT_DIR$/buatest" web="/" />
+            <mapping deploy="/p1_causality/VC-R-CNN" local="$PROJECT_DIR$/VC-R-CNN" web="/" />
           </mappings>
         </serverdata>
       </paths>
     </serverData>
+    <option name="myAutoUpload" value="ALWAYS" />
   </component>
 </project>
