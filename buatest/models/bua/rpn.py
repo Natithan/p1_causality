@@ -129,6 +129,8 @@ class BUARPN(nn.Module):
         features = [features[f] for f in self.in_features]
         pred_objectness_logits, pred_anchor_deltas = self.rpn_head(features)
         anchors = self.anchor_generator(features)
+        batch_size = features[0].shape[0]
+        anchors = [anchors for _ in range(batch_size)] # Nathan: broadcasting anchors to each image in batch
         # TODO: The anchors only depend on the feature map shape; there's probably
         # an opportunity for some optimizations (e.g., caching anchors).
         outputs = BUARPNOutputs(

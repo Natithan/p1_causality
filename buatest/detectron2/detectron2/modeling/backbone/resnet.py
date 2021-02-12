@@ -17,7 +17,7 @@ from detectron2.layers import (
 
 from .backbone import Backbone
 from .build import BACKBONE_REGISTRY
-
+from cfg import FGS
 __all__ = [
     "ResNetBlockBase",
     "BasicBlock",
@@ -516,10 +516,12 @@ class ResNet(Backbone):
             assert "stride" not in kwargs and "stride_per_block" not in kwargs
             kwargs["stride_per_block"] = [first_stride] + [1] * (num_blocks - 1)
             logger = logging.getLogger(__name__)
-            logger.warning(
-                "ResNet.make_stage(first_stride=) is deprecated!  "
-                "Use 'stride_per_block' or 'stride' instead."
-            )
+            # Nathan
+            if FGS.verbose:
+                logger.warning(
+                    "ResNet.make_stage(first_stride=) is deprecated!  "
+                    "Use 'stride_per_block' or 'stride' instead."
+                )
 
         blocks = []
         for i in range(num_blocks):

@@ -39,7 +39,7 @@ from detectron2.utils.collect_env import collect_env_info
 from detectron2.utils.env import seed_all_rng
 from detectron2.utils.events import CommonMetricPrinter, JSONWriter, TensorboardXWriter
 from detectron2.utils.logger import setup_logger
-
+from cfg import FGS
 from . import hooks
 from .train_loop import SimpleTrainer
 
@@ -121,19 +121,20 @@ def default_setup(cfg, args):
     rank = comm.get_rank()
     setup_logger(output_dir, distributed_rank=rank, name="fvcore")
     logger = setup_logger(output_dir, distributed_rank=rank)
+    # Nathan
+    if FGS.verbose:
+        logger.info("Rank of current process: {}. World size: {}".format(rank, comm.get_world_size()))
+        logger.info("Environment info:\n" + collect_env_info())
 
-    logger.info("Rank of current process: {}. World size: {}".format(rank, comm.get_world_size()))
-    logger.info("Environment info:\n" + collect_env_info())
-
-    logger.info("Command line arguments: " + str(args))
-    if hasattr(args, "config_file") and args.config_file != "":
-        logger.info(
-            "Contents of args.config_file={}:\n{}".format(
-                args.config_file, PathManager.open(args.config_file, "r").read()
+        logger.info("Command line arguments: " + str(args))
+        if hasattr(args, "config_file") and args.config_file != "":
+            logger.info(
+                "Contents of args.config_file={}:\n{}".format(
+                    args.config_file, PathManager.open(args.config_file, "r").read()
+                )
             )
-        )
 
-    logger.info("Running with full config:\n{}".format(cfg))
+        logger.info("Running with full config:\n{}".format(cfg))
     if comm.is_main_process() and output_dir:
         # Note: some of our scripts may expect the existence of
         # config.yaml in output directory
@@ -415,7 +416,8 @@ class DefaultTrainer(SimpleTrainer):
         """
         model = build_model(cfg)
         logger = logging.getLogger(__name__)
-        logger.info("Model:\n{}".format(model))
+        if FGS.verbose:
+            logger.info("Model:\n{}".format(model))
         return model
 
     @classmethod

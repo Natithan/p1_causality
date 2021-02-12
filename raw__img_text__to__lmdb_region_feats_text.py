@@ -6,14 +6,10 @@ TridentNet Training Script.
 This script is a simplified version of the training script in detectron2/tools.
 """
 import time
-
-from pathlib import Path
-
-from tensorpack.dataflow import RNGDataFlow, PrefetchDataZMQ
-from tensorpack.dataflow import *
 import json
 import csv
-
+from pathlib import Path
+from tensorpack.dataflow import DataFlow, RNGDataFlow, PrefetchDataZMQ, LMDBSerializer, BatchData
 from tools.DownloadConcptualCaption.download_data import _file_name
 from tqdm import tqdm
 FIELDNAMES = ['image_id', 'image_w', 'image_h', 'num_boxes', 'boxes', 'features', 'cls_prob']
@@ -31,7 +27,6 @@ import cv2
 import numpy as np
 
 sys.path.append('buatest/detectron2')
-import pathlib
 
 import detectron2.utils.comm as comm
 from detectron2.checkpoint import DetectionCheckpointer
@@ -47,13 +42,33 @@ from utils.extract_utils import get_image_blob, save_bbox, save_roi_features_by_
 from utils.progress_bar import ProgressBar
 from models import add_config
 from models.bua.box_regression import BUABoxes
-
+from cfg import FGS
 import ray
 from ray.actor import ActorHandle
 
 BUA_ROOT_DIR = "buatest"
 
+os.environ['CUDA_VISIBLE_DEVICES'] = FGS.gpus
+import torch;torch._C._cuda_init()
 
+
+# --mode
+# caffe
+# --num-cpus
+# 32
+# --gpus
+# '0,1,2,3'
+# --extract-mode
+# roi_feats
+# --min-max-boxes
+# 10,100
+# --config-file
+# buatest/configs/bua-caffe/extract-bua-caffe-r101.yaml
+# --image-dir
+# /cw/liir/NoCsBack/testliir/datasets/ConceptualCaptions/training
+# --mydebug
+# --num_samples
+# 10
 def switch_extract_mode(mode):
     if mode == 'roi_feats':
         switch_cmd = ['MODEL.BUA.EXTRACTOR.MODE', 1]
@@ -270,40 +285,56 @@ def open_tsv(fname, folder):
 # def _file_name(row):
 #     return "%s/%s" % (row['folder'], (zlib.crc32(row['url'].encode('utf-8')) & 0xffffffff))
 
-class Conceptual_Caption(RNGDataFlow):
+class CoCaInputDataflow(DataFlow):
+    def __init__(self,image_dir,max_nb_images=-1):
+        self.image_dir = image_dir
+        self.image_names = []
+        print("Gathering image paths ...")
+        s = time.time()
+        for i,f in enumerate(os.scandir(image_dir)):
+            if (max_nb_images > 0) and (i >= max_nb_images):
+                break
+            self.image_names.append(f.name)
+        print(f"Done gathering image paths after {time.time()-s} seconds")
+        self.num_files = len(self.image_names)
+        print('Number of images: {}.'.format(self.num_files))
+
+    def __iter__(self):
+        for im_name in self.image_names:
+            im = cv2.imread(os.path.join(self.image_dir, im_name))
+            if im is None:
+                print(os.path.join(self.image_dir, im_name), "is illegal!")
+                continue
+            yield get_image_blob(im, FGS.pixel_mean)
+
+    def __len__(self):
+        return self.num_files
+
+class CoCaDataFlow(RNGDataFlow):
     """
     """
 
-    def __init__(self, image_dir, cfg, args, shuffle=False):
-        """
-        Same as in :class:`ILSVRC12`.
-        """
-        # self.corpus_path = corpus_path
-        self.cfg = cfg
-        # self.image_paths = [Path(corpus_path,i) for i in os.listdir(self.corpus_path) if i.endswith(".npz")]
-        print("Gathering image paths ...")
-        self.image_dir = image_dir
-        # self.image_files = list(os.scandir(image_dir))
-        self.image_files = []
-        for i,f in enumerate(os.scandir(image_dir)):
-            if (args.num_samples > 0) and (i >= args.num_samples):
-                break
-            self.image_files.append(f.name)
-        self.num_caps = len(self.image_files)  # TODO: compute the number of processed pics
-        print('Number of images: {}.'.format(self.num_caps))
-        print("Done gathering image paths")
+    def __init__(self, cfg, args, shuffle=False):
         self.shuffle = shuffle
-        self.num_file = 16
-        # self.name = os.path.join(corpus_path, 'CC_resnet101_faster_rcnn_genome.tsv.%d')
-        # self.infiles = [self.name % i for i in range(self.num_file)]
-        self.counts = []
+        self.cfg = cfg
+        self.img_to_input_df = BatchData(CoCaInputDataflow(FGS.image_dir, FGS.max_nb_images), FGS.batch_size, use_list=True)
+        # print("Gathering image paths ...")
+        # self.image_dir = args.image_dir
+        # self.image_files = list(os.scandir(image_dir))
+        # self.image_names = []
+        # for i,f in enumerate(os.scandir(args.image_dir)):
+        #     if (args.num_samples > 0) and (i >= args.num_samples):
+        #         break
+        #     self.image_names.append(f.name)
+        # self.num_caps = len(self.image_names)  # TODO: compute the number of PROCESSED pics
+        # print('Number of images: {}.'.format(self.num_caps))
+        # print("Done gathering image paths")
 
         self.model = DefaultTrainer.build_model(cfg)
         DetectionCheckpointer(self.model, save_dir=self.cfg.OUTPUT_DIR).resume_or_load(
             Path(BUA_ROOT_DIR, cfg.MODEL.WEIGHTS).as_posix(), resume=args.resume
         )
         self.model.eval()
-
 
         caption_path = Path(ROOT_DIR, 'DeVLBert', 'features_lmdb/CC/caption_train.json')
         if os.path.exists(caption_path):
@@ -336,14 +367,24 @@ class Conceptual_Caption(RNGDataFlow):
 
 
     def __len__(self):
-        return self.num_caps
+        return len(self.img_to_input_df)
 
     def __iter__(self):
-        for im_file in self.image_files:
-            im = cv2.imread(os.path.join(self.image_dir, im_file))
-            if im is None:
-                print(os.path.join(self.image_dir, im_file), "is illegal!")
-                continue
+        for rcnn_input in self.img_to_input_df.get_data():
+
+            rcnn_input = [{k:list(v)[i] for k,v in rcnn_input.items()} for i,_ in enumerate(list(rcnn_input.values())[0])] # tensorpack dataflow gives dict of lists, rcnn expects list of dicts
+            with torch.set_grad_enabled(False):
+                    model_outputs = self.model(rcnn_input) # boxes, scores, features_pooled
+            for i,o in enumerate(model_outputs):
+                model_outputs[i] = [e.cpu() if type(e) is torch.Tensor else e.tensor.cpu() for e in o]
+            # boxes = [box.tensor.cpu() for box in boxes]
+            # scores = [score.cpu() for score in scores]
+            # features_pooled = [feat.cpu() for feat in features_pooled]
+            # if not attr_scores is None:
+            #     attr_scores = [attr_score.cpu() for attr_score in attr_scores]
+            image_bboxes, image_feat, info, keep_boxes = prep_roi_features(attr_scores, boxes, cfg, dataset_dict,
+                                                                           features_pooled, im, im_file, scores)
+            return image_bboxes, image_feat, info, keep_boxes
             image_bboxes, image_feat, info, keep_boxes = image_to_intermediate(self.cfg, im, im_file, self.model) #TODO fix "RuntimeError: Cannot re-initialize CUDA in forked subprocess. To use CUDA with multiprocessing, you must use the 'spawn' start method"
             image_id = info['image_id']
             image_h = info['image_h']
@@ -433,7 +474,6 @@ def main():
     start = time.time()
     cfg = setup(args)
     print(f"Setup done after {time.time()-start}")
-    os.environ['CUDA_VISIBLE_DEVICES'] = args.gpu_id
     num_gpus = len(args.gpu_id.split(','))
 
     # Extract features.
@@ -464,9 +504,10 @@ def main():
     #     ray.get(actor.get_counter.remote())
 
     # corpus_path = Path(ROOT_DIR, 'buatest', 'features')
-    ds = Conceptual_Caption(args.image_dir, cfg, args)
+    ds = CoCaDataFlow(cfg, args)
 
     print(f"Conceptual_Caption init done after {time.time()-start}")
+    next(ds.get_data())# TODO remove
     # TODO check the size on this
     ds1 = PrefetchDataZMQ(ds, num_proc=args.num_cpus) #TODO get LMDB saving to speed up with parallelization via PrefetchDataZMQ
     # ds1 = ds
