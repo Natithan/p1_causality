@@ -3,7 +3,7 @@ import numpy as np
 import cv2
 import os
 
-from models.bua.layers.nms import nms
+from models.bua.layers.nms import nms, batched_nms
 from models.bua.box_regression import BUABoxes
 
 PIXEL_MEANS = np.array([[[102.9801, 115.9465, 122.7717]]])
@@ -114,6 +114,53 @@ def prep_roi_features(attr_scores, boxes, cfg, dataset_dict, features_pooled, im
             'objects_conf': image_objects_conf
         }
     return image_bboxes, image_feat, info, keep_boxes
+
+
+def filter_keep_boxes(dets, cfg, scores):  # Nathan
+    MIN_BOXES = cfg.MODEL.BUA.EXTRACTOR.MIN_BOXES
+    MAX_BOXES = cfg.MODEL.BUA.EXTRACTOR.MAX_BOXES
+    CONF_THRESH = cfg.MODEL.BUA.EXTRACTOR.CONF_THRESH
+    IOU_TRESH = 0.3
+
+    max_cls_scores, cls_idxs = scores[:, 1:].max(dim=-1)
+    rough_keep_idxs = batched_nms(dets, max_cls_scores, cls_idxs, IOU_TRESH)
+    rough_keep_scores = torch.index_select(max_cls_scores, 0, rough_keep_idxs)
+    fine_keep_idxs = torch.index_select(input=rough_keep_idxs,
+                                        dim=0,
+                                        index=torch.nonzero(
+                                            torch.where(
+                                                rough_keep_scores >= CONF_THRESH,
+                                                rough_keep_scores,
+                                                torch.zeros_like(rough_keep_scores)
+                                            )
+                                        ).flatten()
+                                        )
+    # # Nathan: Non-parallel, slower way (gives not exactly same result, I guess due to some rounding error in changing
+    # # box coordinates to do parallel. But good enough)
+    # max_conf = torch.zeros((scores.shape[0])).to(scores.device)
+    # for cls_ind in range(1, scores.shape[1]):
+    #     cls_scores = scores[:, cls_ind]
+    #     keep = nms(dets, cls_scores, IOU_TRESH)
+    #     max_conf[keep] = torch.where(cls_scores[keep] > max_conf[keep],
+    #                                  cls_scores[keep],
+    #                                  max_conf[keep])
+    # keep_idxs = torch.nonzero(max_conf >= CONF_THRESH).flatten()
+    # if len(keep_idxs) < MIN_BOXES:
+    #     keep_idxs = torch.argsort(max_conf, descending=True)[:MIN_BOXES]
+    # elif len(keep_idxs) > MAX_BOXES:
+    #     keep_idxs = torch.argsort(max_conf, descending=True)[:MAX_BOXES]
+    if len(fine_keep_idxs) < MIN_BOXES: # Nathan adapted to batched_nms use as well
+        fine_keep_idxs = torch.index_select(input=rough_keep_idxs,
+                           dim=0,
+                           index=torch.argsort(rough_keep_scores, dim=-1, descending=True)
+                           )[:MIN_BOXES]
+    elif len(fine_keep_idxs) > MAX_BOXES:
+        fine_keep_idxs = torch.index_select(input=rough_keep_idxs,
+                           dim=0,
+                           index=torch.argsort(rough_keep_scores, dim=-1, descending=True)
+                           )[:MAX_BOXES]
+
+    return fine_keep_idxs
 
 
 def save_bbox(args, cfg, im_file, im, dataset_dict, boxes, scores):
