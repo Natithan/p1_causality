@@ -2,6 +2,8 @@ import ray
 import time
 from argparse import Namespace
 import numpy as np
+from tensorpack import LMDBSerializer
+
 from raw__img_text__to__lmdb_region_feats_text import CoCaDataFlow, setup
 
 IMAGE_DIR = '/cw/liir/NoCsBack/testliir/datasets/ConceptualCaptions/training'
@@ -17,42 +19,37 @@ args = Namespace(bbox_dir='bbox',
                  num_samples=100,
                  opts=[],
                  output_dir='features',
-                 resume=False
+                 resume=False,
+                 visual_features_lmdb="/cw/liir/NoCsBack/testliir/nathan/p1_causality/DeVLBert/features_lmdb/CC/training_feat_all_debug_1613474882.lmdb"
                  )
 
 
 def main():  # TODO make this (a lot) faster
-    cfg = setup(args)
-    ds = CoCaDataFlow(cfg, args)
-    if args.num_cpus != 0:
-        ray.init(num_cpus=args.num_cpus)
-    else:
-        ray.init()
-    cooc_matrix_list = []
+    ds = LMDBSerializer.load(args.visual_features_lmdb)
+    ds.reset_state()
     print("Starting co-occurrence counting")
+    # cooc_matrix = get_cooc_matrix.remote(ds)
+    # for i in range(args.num_cpus):
     start = time.time()
-    cooc_matrix = get_cooc_matrix.remote(ds)
+    cooc_matrix = get_cooc_matrix(ds)
     print(time.time() - start)
-    for i in range(num_gpus):
-        cooc_matrix_list.append(get_cooc_matrix.remote(i, img_lists[i], cfg, args, actor))
 
-    ray.get(cooc_matrix_list)
+    # ray.get(cooc_matrix_list)
+    print("Saving co-occurrence counts")
     np.save('cooc_matrix.npy', cooc_matrix)
 
-@ray.remote(num_cpus=8, num_gpus=1)
-def get_cooc_matrix(split_idx, ds):
-    for e, dp in enumerate(ds.get_data()):
-        if e > 30:
-            break
-        cls_probs = dp[1]
-        cooc_matrix = np.zeros((cls_probs.shape[-1], cls_probs.shape[-1]))
+
+def get_cooc_matrix(ds):
+    NB_CLASSES = 1601
+    cooc_matrix = np.zeros((NB_CLASSES, NB_CLASSES))
+    for e, (_, cls_probs, _, _, _, _, _, _) in enumerate(ds.get_data()):
         cls_idxs = np.argmax(cls_probs, 1)
         seen = []
         for n, i in enumerate(cls_idxs):
             if i in seen:  # We don't care about multiple co-occurrences: we only care about either [zero] or [one or more] co-occurrences
                 continue
             seen.append(i)
-            for j in cls_idxs[n:]:
+            for j in cls_idxs[n+1:]:
                 if j in seen:  # This also means we don't count self-co-occurrences, as they are always true anyway
                     continue
                 if i > j:

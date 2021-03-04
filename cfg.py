@@ -4,7 +4,7 @@ FGS = flags.FLAGS
 flags.DEFINE_list("pixel_mean", [102.9801, 115.9465, 122.7717],"")
 flags.DEFINE_string("image_dir","/cw/liir/NoCsBack/testliir/datasets/ConceptualCaptions/training", "")
 flags.DEFINE_integer("max_nb_images",1000, "")
-flags.DEFINE_integer("batch_size",10, "")
+flags.DEFINE_integer("batch_size",6, "")
 flags.DEFINE_integer("num-cpus",32, "")
 flags.DEFINE_integer("num_cpus",32, "")
 flags.DEFINE_string("gpus","1,2,3", "")

@@ -1,3 +1,11 @@
+from tensorpack.dataflow import DataFlow, RNGDataFlow, PrefetchDataZMQ, LMDBSerializer, BatchData
+
+ds = LMDBSerializer.load("/cw/liir/NoCsBack/testliir/nathan/p1_causality/DeVLBert/features_lmdb/CC/training_feat_all_debug_1613474882.lmdb")
+ds.reset_state()
+a = next(ds.get_data())
+
+
+
 import pathlib
 import torchvision
 import torch

@@ -344,6 +344,83 @@ class CoCaInputDataflow(DataFlow):
         return self.num_files
 
 
+from torch.nn.parallel._functions import Scatter, Gather
+from torch.nn.parallel import DataParallel
+import torch
+
+# This code was copied from torch.nn.parallel and adapted for DataParallel to chunk lists instead of duplicating them
+# (this is really all this code is here for)
+#from https://discuss.pytorch.org/t/dataparallel-chunking-for-a-list-of-3d-tensors/15962/7
+class DataParallelV2(DataParallel):
+
+    def scatter_kwargs(self, inputs, kwargs, target_gpus, dim=0):
+        r"""Scatter with support for kwargs dictionary"""
+        inputs = self.scatter_wrapper(inputs, target_gpus, dim) if inputs else []
+        kwargs = self.scatter_wrapper(kwargs, target_gpus, dim) if kwargs else []
+        if len(inputs) < len(kwargs):
+            inputs.extend([() for _ in range(len(kwargs) - len(inputs))])
+        elif len(kwargs) < len(inputs):
+            kwargs.extend([{} for _ in range(len(inputs) - len(kwargs))])
+        inputs = tuple(inputs)
+        kwargs = tuple(kwargs)
+        return inputs, kwargs
+
+    def scatter_wrapper(self, inputs, target_gpus, dim=0):
+        r"""
+        Slices tensors into approximately equal chunks and
+        distributes them across given GPUs. Duplicates
+        references to objects that are not tensors.
+        """
+
+        def scatter_map(obj):
+            if isinstance(obj, torch.Tensor):
+                return Scatter.apply(target_gpus, None, dim, obj)
+            if isinstance(obj, tuple) and len(obj) > 0:
+                return list(zip(*map(scatter_map, obj)))
+            if isinstance(obj, list) and len(obj) > 0:
+                size = len(obj) // len(target_gpus)
+                return [obj[i * size:(i + 1) * size] for i in range(len(target_gpus))]
+            if isinstance(obj, dict) and len(obj) > 0:
+                return list(map(type(obj), zip(*map(scatter_map, obj.items()))))
+            return [obj for targets in target_gpus]
+
+        # After scatter_map is called, a scatter_map cell will exist. This cell
+        # has a reference to the actual function scatter_map, which has references
+        # to a closure that has a reference to the scatter_map cell (because the
+        # fn is recursive). To avoid this reference cycle, we set the function to
+        # None, clearing the cell
+        try:
+            return scatter_map(inputs)
+        finally:
+            scatter_map = None
+
+    def scatter(self, inputs, kwargs, device_ids):
+        return self.scatter_kwargs(inputs, kwargs, device_ids, dim=self.dim)
+
+    def gather(self, outputs, output_device):
+        def gather_map(outputs):
+            out = outputs[0]
+            if isinstance(out,BUABoxes):
+                return BUABoxes(Gather.apply(output_device, self.dim, *[o.tensor for o in outputs]))
+            if isinstance(out, torch.Tensor):
+                return Gather.apply(output_device, self.dim, *outputs)
+            if out is None:
+                return None
+            if isinstance(out, dict):
+                if not all((len(out) == len(d) for d in outputs)):
+                    raise ValueError('All dicts must have the same number of keys')
+                return type(out)(((k, gather_map([d[k] for d in outputs]))
+                                  for k in out))
+            return type(out)(map(gather_map, zip(*outputs)))
+
+        # Recursive function calls like this create reference cycles.
+        # Setting the function to None clears the refcycle.
+        try:
+            res = gather_map(outputs)
+        finally:
+            gather_map = None
+        return res
+
 class CoCaDataFlow(RNGDataFlow):
     """
     """
@@ -351,7 +428,8 @@ class CoCaDataFlow(RNGDataFlow):
     def __init__(self, cfg, args, shuffle=False):
         self.shuffle = shuffle
         self.cfg = cfg
-        self.img_to_input_df = BatchData(CoCaInputDataflow(FGS.image_dir, FGS.max_nb_images), FGS.batch_size,
+        self.non_batched_img_to_input_df = CoCaInputDataflow(FGS.image_dir, FGS.max_nb_images)
+        self.img_to_input_df = BatchData(self.non_batched_img_to_input_df, FGS.batch_size,
                                          use_list=True)
         # print("Gathering image paths ...")
         # self.image_dir = args.image_dir
@@ -370,9 +448,11 @@ class CoCaDataFlow(RNGDataFlow):
             Path(BUA_ROOT_DIR, cfg.MODEL.WEIGHTS).as_posix(), resume=args.resume
         )
         self.model.eval()
+        self.model = DataParallelV2(self.model)
+
 
     def __len__(self):
-        return len(self.img_to_input_df)
+        return int(len(self.non_batched_img_to_input_df) / len(self.model.device_ids))
 
     def __iter__(self):
         for data_dict in self.img_to_input_df.get_data():
@@ -394,9 +474,7 @@ class CoCaDataFlow(RNGDataFlow):
             for single_boxes, single_feats, single_scores, scale in zip(boxes, feats, scores, data_dict[
                 'im_scale']):
                 og_boxes = single_boxes / scale  # Nathan
-                s = time()
                 keep_idxs_single = filter_keep_boxes(og_boxes, self.cfg, single_scores)
-                print(f"NMS took {time()-s} seconds")
                 keep_idxs.append(keep_idxs_single)
 
                 keep_feats.append(single_feats[keep_idxs_single])
@@ -525,16 +603,9 @@ def main():
     ds = CoCaDataFlow(cfg, args)
 
     print(f"Conceptual_Caption init done after {time() - start}")
-    for dp in ds.get_data():  # TODO remove
-        print(len(dp))
-    # TODO check the size on this
-    ds1 = PrefetchDataZMQ(ds,
-                          num_proc=args.num_cpus)  # TODO get LMDB saving to speed up with parallelization via PrefetchDataZMQ
-    # ds1 = ds
-    LMDBSerializer.save(ds1, str(Path(ROOT_DIR, 'DeVLBert',
+    LMDBSerializer.save(ds, str(Path(ROOT_DIR, 'DeVLBert',
                                       f'features_lmdb/CC/training_feat_{args.num_samples if args.num_samples > 0 else "all"}_debug_{int(time())}.lmdb')))
     print(f"Done after {time() - start}")
-    # LMDBSerializer.save(ds1, '/mnt3/yangan.ya/features_lmdb/CC/training_feat_all.lmdb')
 
 
 if __name__ == '__main__':

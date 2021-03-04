@@ -384,7 +384,7 @@ class ResNet(Backbone):
         self._out_feature_strides = {"stem": current_stride}
         self._out_feature_channels = {"stem": self.stem.out_channels}
 
-        self.stages_and_names = []
+        # self.stages_and_names = []
         for i, blocks in enumerate(stages):
             assert len(blocks) > 0, len(blocks)
             for block in blocks:
@@ -394,7 +394,7 @@ class ResNet(Backbone):
             stage = nn.Sequential(*blocks)
 
             self.add_module(name, stage)
-            self.stages_and_names.append((stage, name))
+            # self.stages_and_names.append((stage, name))
 
             self._out_feature_strides[name] = current_stride = int(
                 current_stride * np.prod([k.stride for k in blocks])
@@ -432,7 +432,11 @@ class ResNet(Backbone):
         x = self.stem(x)
         if "stem" in self._out_features:
             outputs["stem"] = x
-        for stage, name in self.stages_and_names:
+        # for stage, name in self.stages_and_names:
+        for name in self._modules: # Nathan: iterating over _modules as only they are put on the right device by DataParallel
+            if name == 'stem':
+                continue
+            stage = self._modules[name]
             x = stage(x)
             if name in self._out_features:
                 outputs[name] = x
@@ -470,7 +474,11 @@ class ResNet(Backbone):
         """
         if freeze_at >= 1:
             self.stem.freeze()
-        for idx, (stage, _) in enumerate(self.stages_and_names, start=2):
+        # for idx, (stage, _) in enumerate(self.stages_and_names, start=2): #NATHAN
+        for idx, name in enumerate(list(self._modules), start=2):
+            if name == 'stem':
+                continue
+            stage = self._modules[name]
             if freeze_at >= idx:
                 for block in stage.children():
                     block.freeze()
