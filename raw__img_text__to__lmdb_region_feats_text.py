@@ -5,6 +5,7 @@ TridentNet Training Script.
 
 This script is a simplified version of the training script in detectron2/tools.
 """
+from absl.flags import argparse_flags
 from time import time
 import json
 import csv
@@ -348,9 +349,10 @@ from torch.nn.parallel._functions import Scatter, Gather
 from torch.nn.parallel import DataParallel
 import torch
 
+
 # This code was copied from torch.nn.parallel and adapted for DataParallel to chunk lists instead of duplicating them
 # (this is really all this code is here for)
-#from https://discuss.pytorch.org/t/dataparallel-chunking-for-a-list-of-3d-tensors/15962/7
+# from https://discuss.pytorch.org/t/dataparallel-chunking-for-a-list-of-3d-tensors/15962/7
 class DataParallelV2(DataParallel):
 
     def scatter_kwargs(self, inputs, kwargs, target_gpus, dim=0):
@@ -398,28 +400,33 @@ class DataParallelV2(DataParallel):
         return self.scatter_kwargs(inputs, kwargs, device_ids, dim=self.dim)
 
     def gather(self, outputs, output_device):
-        def gather_map(outputs):
-            out = outputs[0]
-            if isinstance(out,BUABoxes):
-                return BUABoxes(Gather.apply(output_device, self.dim, *[o.tensor for o in outputs]))
-            if isinstance(out, torch.Tensor):
-                return Gather.apply(output_device, self.dim, *outputs)
-            if out is None:
-                return None
-            if isinstance(out, dict):
-                if not all((len(out) == len(d) for d in outputs)):
-                    raise ValueError('All dicts must have the same number of keys')
-                return type(out)(((k, gather_map([d[k] for d in outputs]))
-                                  for k in out))
-            return type(out)(map(gather_map, zip(*outputs)))
-
-        # Recursive function calls like this create reference cycles.
-        # Setting the function to None clears the refcycle.
-        try:
-            res = gather_map(outputs)
-        finally:
-            gather_map = None
+        # def gather_map(outputs):
+        #     out = outputs[0]
+        #     # if isinstance(out,BUABoxes):
+        #     #     return BUABoxes(Gather.apply(output_device, self.dim, *[o.tensor for o in outputs])) #TODO split this up per image
+        #     if isinstance(out, torch.Tensor) or isinstance(out,BUABoxes):
+        #         # return Gather.apply(output_device, self.dim, *outputs)
+        #         return type(outputs)([o.to(output_device) for o in outputs])
+        #     if out is None:
+        #         return None
+        #     if isinstance(out, dict):
+        #         if not all((len(out) == len(d) for d in outputs)):
+        #             raise ValueError('All dicts must have the same number of keys')
+        #         return type(out)(((k, gather_map([d[k] for d in outputs]))
+        #                           for k in out))
+        #     return type(out)(map(gather_map, zip(*outputs)))
+        #
+        # # Recursive function calls like this create reference cycles.
+        # # Setting the function to None clears the refcycle.
+        # try:
+        #     res = gather_map(outputs)
+        # finally:
+        #     gather_map = None
+        # return res
+        res = [tuple([box_or_tensor.to(output_device) for box_or_tensor in single_image_result]) for o in outputs for
+               single_image_result in list(zip(*o))]
         return res
+
 
 class CoCaDataFlow(RNGDataFlow):
     """
@@ -450,9 +457,8 @@ class CoCaDataFlow(RNGDataFlow):
         self.model.eval()
         self.model = DataParallelV2(self.model)
 
-
     def __len__(self):
-        return int(len(self.non_batched_img_to_input_df) / len(self.model.device_ids))
+        return len(self.non_batched_img_to_input_df)
 
     def __iter__(self):
         for data_dict in self.img_to_input_df.get_data():
@@ -462,9 +468,8 @@ class CoCaDataFlow(RNGDataFlow):
             with torch.set_grad_enabled(False):
                 model_outputs = list(self.model(rcnn_input))  # boxes, scores, features_pooled
             for i, o in enumerate(model_outputs):
-                model_outputs[i] = [e.cpu() if type(e) is torch.Tensor else e.tensor.cpu() for e in o]
-            assert len(model_outputs) == 3, "Nathan: Make sure attribute_extraction is turned off"
-            boxes, scores, feats = model_outputs
+                model_outputs[i] = [e.to('cpu') for e in o]
+            boxes, scores, feats = zip(*model_outputs)
 
             keep_idxs = []
             keep_feats = []
@@ -473,6 +478,7 @@ class CoCaDataFlow(RNGDataFlow):
             num_boxes = []
             for single_boxes, single_feats, single_scores, scale in zip(boxes, feats, scores, data_dict[
                 'im_scale']):
+                single_boxes = single_boxes.tensor # TODO if I drop the BUABox wrapper here, and don't need it anywhere else, maybe drop it alltogether
                 og_boxes = single_boxes / scale  # Nathan
                 keep_idxs_single = filter_keep_boxes(og_boxes, self.cfg, single_scores)
                 keep_idxs.append(keep_idxs_single)
@@ -512,99 +518,65 @@ class CoCaDataFlow(RNGDataFlow):
 
 def main():
     # region Parser stuff
-    parser = argparse.ArgumentParser(description="PyTorch Object Detection2 Inference")
-    parser.add_argument(
-        "--config-file",
-        default="configs/bua-caffe/extract-bua-caffe-r101.yaml",
-        metavar="FILE",
-        help="path to config file",
-    )
+    parser = argparse_flags.ArgumentParser(description="PyTorch Object Detection2 Inference")
 
     # Nathan
 
-    parser.add_argument('--mydebug',
-                        action="store_true",
-                        help="if active, ray is not used, as it doesn't allow the pycharm debugger to go into the subprocess")
-
-    parser.add_argument('--num-cpus', default=1, type=int,
-                        help='number of cpus to use for ray, 0 means no limit')
-
-    parser.add_argument('--num_samples', default=0, type=int,
-                        help='number of samples to convert, 0 means all')
-    parser.add_argument('--gpus', dest='gpu_id', help='GPU id(s) to use',
-                        default='0', type=str)
-
-    parser.add_argument("--mode", default="caffe", type=str, help="bua_caffe, ...")
-
-    parser.add_argument('--extract-mode', default='roi_feats', type=str,
-                        help="'roi_feats', 'bboxes' and 'bbox_feats' indicates \
-                        'extract roi features directly', 'extract bboxes only' and \
-                        'extract roi features with pre-computed bboxes' respectively")
-
-    parser.add_argument('--min-max-boxes', default='min_max_default', type=str,
-                        help='the number of min-max boxes of extractor')
-
-    parser.add_argument('--out-dir', dest='output_dir',
-                        help='output directory for features',
-                        default="features")
-    parser.add_argument('--image-dir', dest='image_dir',
-                        help='directory with images',
-                        default="image")
-    parser.add_argument('--bbox-dir', dest='bbox_dir',
-                        help='directory with bbox',
-                        default="bbox")
-    parser.add_argument(
-        "--resume",
-        action="store_true",
-        help="whether to attempt to resume from the checkpoint directory",
-    )
-    parser.add_argument(
-        "opts",
-        help="Modify config options using the command-line",
-        default=None,
-        nargs=argparse.REMAINDER,
-    )
-
-    args = parser.parse_args()
+    # parser.add_argument('--mydebug',
+    #                     action="store_true",
+    #                     help="if active, ray is not used, as it doesn't allow the pycharm debugger to go into the subprocess")
+    #
+    # parser.add_argument('--num-cpus', default=1, type=int,
+    #                     help='number of cpus to use for ray, 0 means no limit')
+    #
+    # parser.add_argument('--num_samples', default=0, type=int,
+    #                     help='number of samples to convert, 0 means all')
+    # parser.add_argument('--gpus', dest='gpu_id', help='GPU id(s) to use',
+    #                     default='0', type=str)
+    #
+    # parser.add_argument("--mode", default="caffe", type=str, help="bua_caffe, ...")
+    #
+    # parser.add_argument('--extract-mode', default='roi_feats', type=str,
+    #                     help="'roi_feats', 'bboxes' and 'bbox_feats' indicates \
+    #                     'extract roi features directly', 'extract bboxes only' and \
+    #                     'extract roi features with pre-computed bboxes' respectively")
+    #
+    # parser.add_argument('--min-max-boxes', default='min_max_default', type=str,
+    #                     help='the number of min-max boxes of extractor')
+    #
+    # parser.add_argument('--out-dir', dest='output_dir',
+    #                     help='output directory for features',
+    #                     default="features")
+    # parser.add_argument('--image-dir', dest='image_dir',
+    #                     help='directory with images',
+    #                     default="image")
+    # parser.add_argument('--bbox-dir', dest='bbox_dir',
+    #                     help='directory with bbox',
+    #                     default="bbox")
+    # parser.add_argument(
+    #     "--resume",
+    #     action="store_true",
+    #     help="whether to attempt to resume from the checkpoint directory",
+    # # )
+    # parser.add_argument(
+    #     "opts",
+    #     help="Modify config options using the command-line",
+    #     default=None,
+    #     nargs=argparse.REMAINDER,
+    # )
+    #
+    # args = parser.parse_args()
     # endregion
+    args = FGS
     start = time()
     cfg = setup(args)
     print(f"Setup done after {time() - start}")
-    num_gpus = len(args.gpu_id.split(','))
 
-    # Extract features.
-    # imglist = os.listdir(args.image_dir)
-    # num_images = len(imglist)
-    # print('Number of images: {}.'.format(num_images))
-    # if not args.mydebug:
-    #     if args.num_cpus != 0:
-    #         ray.init(num_cpus=args.num_cpus)
-    #     else:
-    #         ray.init()
-    #     pb = ProgressBar(len(imglist))
-    #     actor = pb.actor
-    #
-    # img_lists = [imglist[i::num_gpus] for i in range(num_gpus)]
-
-    # print('Number of GPUs: {}.'.format(num_gpus))
-    # extract_feat_list = []
-    # for i in range(num_gpus):
-    #     if not args.mydebug:
-    #         extract_feat_list.append(extract_feat.remote(i, img_lists[i], cfg, args, actor))
-    #     else:
-    #         extract_feat_list.append(extract_feat_no_ray(i, img_lists[i], cfg, args))
-    #
-    # if not args.mydebug:
-    #     pb.print_until_done()
-    #     ray.get(extract_feat_list)
-    #     ray.get(actor.get_counter.remote())
-
-    # corpus_path = Path(ROOT_DIR, 'buatest', 'features')
     ds = CoCaDataFlow(cfg, args)
 
     print(f"Conceptual_Caption init done after {time() - start}")
     LMDBSerializer.save(ds, str(Path(ROOT_DIR, 'DeVLBert',
-                                      f'features_lmdb/CC/training_feat_{args.num_samples if args.num_samples > 0 else "all"}_debug_{int(time())}.lmdb')))
+                                     f'features_lmdb/CC/training_feat_{args.num_samples if args.num_samples > 0 else "all"}_debug_{int(time())}.lmdb')))
     print(f"Done after {time() - start}")
 
 
