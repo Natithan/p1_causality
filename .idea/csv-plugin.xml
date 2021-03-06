@@ -3,6 +3,13 @@
   <component name="CsvFileAttributes">
     <option name="attributeMap">
       <map>
+        <entry key="C:\Users\natha\AppData\Local\JetBrains\PyCharm2020.3\remote_sources\1539365460\81906985\tensorpack\dataflow\serialize.py">
+          <value>
+            <Attribute>
+              <option name="separator" value="," />
+            </Attribute>
+          </value>
+        </entry>
         <entry key="\buatest\models\bua\nathan_test.py">
           <value>
             <Attribute>
@@ -11,6 +18,13 @@
           </value>
         </entry>
         <entry key="\cooccurrence_finder.py">
+          <value>
+            <Attribute>
+              <option name="separator" value="," />
+            </Attribute>
+          </value>
+        </entry>
+        <entry key="\tmp.py">
           <value>
             <Attribute>
               <option name="separator" value="," />

@@ -5,13 +5,18 @@ TridentNet Training Script.
 
 This script is a simplified version of the training script in detectron2/tools.
 """
+import pickle
+
 from absl.flags import argparse_flags
 from time import time
 import json
 import csv
 from pathlib import Path
 from tensorpack.dataflow import DataFlow, RNGDataFlow, PrefetchDataZMQ, LMDBSerializer, BatchData
-from tools.DownloadConcptualCaption.download_data import _file_name
+
+from constants import CHECKPOINT_FREQUENCY
+from tmp import MyLMDBSerializer
+from DeVLBert.tools.DownloadConcptualCaption.download_data import _file_name
 from tqdm import tqdm
 
 FIELDNAMES = ['image_id', 'image_w', 'image_h', 'num_boxes', 'boxes', 'features', 'cls_prob']
@@ -38,10 +43,10 @@ from detectron2.engine import DefaultTrainer, default_setup, launch
 from detectron2.evaluation import COCOEvaluator, verify_results
 from detectron2.structures import Instances
 
-from utils.utils import mkdir, save_features
-from utils.extract_utils import get_image_blob, save_bbox, save_roi_features_by_bbox, save_roi_features, \
+from buatest.utils.utils import mkdir, save_features
+from buatest.utils.extract_utils import get_image_blob, save_bbox, save_roi_features_by_bbox, save_roi_features, \
     prep_roi_features, filter_keep_boxes
-from utils.progress_bar import ProgressBar
+from buatest.utils.progress_bar import ProgressBar
 from models import add_config
 from models.bua.box_regression import BUABoxes
 from cfg import FGS
@@ -49,12 +54,11 @@ import ray
 from ray.actor import ActorHandle
 
 BUA_ROOT_DIR = "buatest"
-
 os.environ['CUDA_VISIBLE_DEVICES'] = FGS.gpus
 import torch;
 
 torch._C._cuda_init()
-
+input_index_file = Path(ROOT_DIR, 'DeVLBert', f'features_lmdb/CC/{FGS.index_file}')
 
 # --mode
 # caffe
@@ -288,6 +292,7 @@ def open_tsv(fname, folder):
 
 class CoCaInputDataflow(DataFlow):
     def __init__(self, image_dir, max_nb_images=-1):
+
         self.image_dir = image_dir
         self.image_ids = []
         print("Gathering image paths ...")
@@ -329,12 +334,29 @@ class CoCaInputDataflow(DataFlow):
             json.dump(self.captions, open(caption_path, 'w'))
             print(f"Done")
 
+        self.clean_count = 0
+        self.dirty_count = 0
+        if not FGS.from_scratch:
+            if os.path.exists(input_index_file):
+                print("Starting from existing index")
+                self.clean_count, self.dirty_count = pickle.load(open(input_index_file, 'rb'))
+            else:
+                pickle.dump((self.clean_count, self.dirty_count), open(input_index_file, 'wb'))
+    def total_count(self):
+        return self.clean_count + self.dirty_count
     def __iter__(self):
-        for image_id in self.image_ids:
+        for image_id in self.image_ids[self.total_count():]:
             im = cv2.imread(os.path.join(self.image_dir, image_id))
+
+            if self.clean_count % CHECKPOINT_FREQUENCY == 0:
+                pickle.dump((self.clean_count, self.dirty_count), open(input_index_file, 'wb')) #TODO test this indexing, and do it also at the lmdb level
+
             if im is None:
                 print(os.path.join(self.image_dir, image_id), "is illegal!")
+                self.dirty_count += 1
                 continue
+            self.clean_count += 1
+
             yield {**get_image_blob(im, FGS.pixel_mean),
                    "img_id": image_id,
                    "img_width": im.shape[0],
@@ -488,85 +510,13 @@ class CoCaDataFlow(RNGDataFlow):
                 keep_scores.append(single_scores[keep_idxs_single].numpy())
                 num_boxes.append(len(keep_idxs_single))
 
-            # return image_bboxes, image_feat, info, keep_boxes
-            # image_bboxes, image_feat, info, keep_boxes = prep_roi_features(None, boxes, self.cfg, rcnn_input,
-            #                                                                features_pooled, im, img_file, scores)
-            # return image_bboxes, image_feat, info, keep_boxes
-            # image_bboxes, image_feat, info, keep_boxes = image_to_intermediate(self.cfg, im, img_file, self.model) #TODO fix "RuntimeError: Cannot re-initialize CUDA in forked subprocess. To use CUDA with multiprocessing, you must use the 'spawn' start method"
             for f, s, b, nb, h, w, i, c in zip(keep_feats, keep_scores, keep_og_boxes, num_boxes,
                                                data_dict['img_height'], data_dict['img_width'], data_dict['img_id'],
                                                data_dict['caption']):
                 yield [f, s, b, nb, h, w, i, c]
-            # yield [keep_feats, keep_scores, keep_og_boxes, num_boxes, data_dict['img_height'], data_dict['img_width'],
-            #        data_dict['img_id'], data_dict['caption']]
-            # for infile in self.infiles:
-            #     count = 0
-            # with open(infile) as tsv_in_file:
-            #     reader = csv.DictReader(tsv_in_file, delimiter='\t', fieldnames = FIELDNAMES)
-            #     for item in reader:
-            #         image_id = item['image_id']
-            #         image_h = item['image_h']
-            #         image_w = item['image_w']
-            #         num_boxes = item['num_boxes']
-            #         boxes = np.frombuffer(base64.b64decode(item['boxes']), dtype=np.float32).reshape(int(num_boxes), 4)
-            #         features = np.frombuffer(base64.b64decode(item['features']), dtype=np.float32).reshape(int(num_boxes), 2048)
-            #         cls_prob = np.frombuffer(base64.b64decode(item['cls_prob']), dtype=np.float32).reshape(int(num_boxes), 1601)
-            #         caption = self.captions[image_id]
-            #
-            #         yield [features, cls_prob, boxes, num_boxes, image_h, image_w, image_id, caption]
 
 
 def main():
-    # region Parser stuff
-    parser = argparse_flags.ArgumentParser(description="PyTorch Object Detection2 Inference")
-
-    # Nathan
-
-    # parser.add_argument('--mydebug',
-    #                     action="store_true",
-    #                     help="if active, ray is not used, as it doesn't allow the pycharm debugger to go into the subprocess")
-    #
-    # parser.add_argument('--num-cpus', default=1, type=int,
-    #                     help='number of cpus to use for ray, 0 means no limit')
-    #
-    # parser.add_argument('--num_samples', default=0, type=int,
-    #                     help='number of samples to convert, 0 means all')
-    # parser.add_argument('--gpus', dest='gpu_id', help='GPU id(s) to use',
-    #                     default='0', type=str)
-    #
-    # parser.add_argument("--mode", default="caffe", type=str, help="bua_caffe, ...")
-    #
-    # parser.add_argument('--extract-mode', default='roi_feats', type=str,
-    #                     help="'roi_feats', 'bboxes' and 'bbox_feats' indicates \
-    #                     'extract roi features directly', 'extract bboxes only' and \
-    #                     'extract roi features with pre-computed bboxes' respectively")
-    #
-    # parser.add_argument('--min-max-boxes', default='min_max_default', type=str,
-    #                     help='the number of min-max boxes of extractor')
-    #
-    # parser.add_argument('--out-dir', dest='output_dir',
-    #                     help='output directory for features',
-    #                     default="features")
-    # parser.add_argument('--image-dir', dest='image_dir',
-    #                     help='directory with images',
-    #                     default="image")
-    # parser.add_argument('--bbox-dir', dest='bbox_dir',
-    #                     help='directory with bbox',
-    #                     default="bbox")
-    # parser.add_argument(
-    #     "--resume",
-    #     action="store_true",
-    #     help="whether to attempt to resume from the checkpoint directory",
-    # # )
-    # parser.add_argument(
-    #     "opts",
-    #     help="Modify config options using the command-line",
-    #     default=None,
-    #     nargs=argparse.REMAINDER,
-    # )
-    #
-    # args = parser.parse_args()
-    # endregion
     args = FGS
     start = time()
     cfg = setup(args)
@@ -575,8 +525,7 @@ def main():
     ds = CoCaDataFlow(cfg, args)
 
     print(f"Conceptual_Caption init done after {time() - start}")
-    LMDBSerializer.save(ds, str(Path(ROOT_DIR, 'DeVLBert',
-                                     f'features_lmdb/CC/training_feat_{args.num_samples if args.num_samples > 0 else "all"}_debug_{int(time())}.lmdb')))
+    MyLMDBSerializer.save(ds, str(Path(ROOT_DIR, 'DeVLBert', f'features_lmdb/CC/{FGS.lmdb_file}.lmdb')),write_frequency=CHECKPOINT_FREQUENCY)
     print(f"Done after {time() - start}")
 
 
