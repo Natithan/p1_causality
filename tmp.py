@@ -143,29 +143,28 @@ class MyLMDBSerializer:
             txn = put_or_grow(txn, key, value)
             return txn
 
-        #Nathan TODO use txn.stat()['entries'] instead as indicator of where to start writing next. Find way to make sure this is in sync with image input at CoCaInputDataFlow
-        idxs = {}
-        start = 0
-        if not FGS.from_scratch:
-            if os.path.exists(FGS.lmdb_index_file):
-                idxs = pickle.load(open(FGS.lmdb_index_file, 'rb'))
-                if path in idxs:
-                    start = idxs[path]
-                else:
-                    idxs[path] = start
-                    pickle.dump(idxs, open(FGS.lmdb_index_file, 'wb'))
-            else:
-                idxs[path] = start
-                pickle.dump(idxs, open(FGS.lmdb_index_file, 'wb'))
+        # #Nathan
+        # idxs = {}
+        # start = 0
+        # if not FGS.from_scratch:
+        #     if os.path.exists(FGS.lmdb_index_file):
+        #         idxs = pickle.load(open(FGS.lmdb_index_file, 'rb'))
+        #         if path in idxs:
+        #             start = idxs[path]
+        #         else:
+        #             idxs[path] = start
+        #             pickle.dump(idxs, open(FGS.lmdb_index_file, 'wb'))
+        #     else:
+        #         idxs[path] = start
+        #         pickle.dump(idxs, open(FGS.lmdb_index_file, 'wb'))
 
-
-        with get_tqdm(total=size) as pbar:
-            # idx = -1
-
+        txn = db.begin(write=True)
+        previous_idx = txn.stat()['entries']
+        with get_tqdm(total=size,initial=df.non_batched_img_to_input_df.clean_count) as pbar:
+            idx = 0
+            real_idx = previous_idx + idx
             # LMDB transaction is not exception-safe!
             # although it has a context manager interface
-            txn = db.begin(write=True)
-            previous_idx = txn.stat()['entries']
             for idx, dp in enumerate(df):
                 real_idx = previous_idx + idx
                 # if real_idx % CHECKPOINT_FREQUENCY == 0:

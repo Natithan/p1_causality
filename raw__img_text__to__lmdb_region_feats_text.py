@@ -19,7 +19,6 @@ from tmp import MyLMDBSerializer
 from DeVLBert.tools.DownloadConcptualCaption.download_data import _file_name
 from tqdm import tqdm
 
-FIELDNAMES = ['image_id', 'image_w', 'image_h', 'num_boxes', 'boxes', 'features', 'cls_prob']
 import sys
 import pandas as pd
 
@@ -53,12 +52,14 @@ from cfg import FGS
 import ray
 from ray.actor import ActorHandle
 
+FIELDNAMES = ['image_id', 'image_w', 'image_h', 'num_boxes', 'boxes', 'features', 'cls_prob']
 BUA_ROOT_DIR = "buatest"
 os.environ['CUDA_VISIBLE_DEVICES'] = FGS.gpus
 import torch;
 
 torch._C._cuda_init()
-input_index_file = Path(ROOT_DIR, 'DeVLBert', f'features_lmdb/CC/{FGS.index_file}')
+input_index_file = Path(FGS.lmdb_folder,f'{FGS.lmdb_file}_{FGS.index_file}')
+
 
 # --mode
 # caffe
@@ -342,14 +343,17 @@ class CoCaInputDataflow(DataFlow):
                 self.clean_count, self.dirty_count = pickle.load(open(input_index_file, 'rb'))
             else:
                 pickle.dump((self.clean_count, self.dirty_count), open(input_index_file, 'wb'))
+
     def total_count(self):
         return self.clean_count + self.dirty_count
+
     def __iter__(self):
         for image_id in self.image_ids[self.total_count():]:
             im = cv2.imread(os.path.join(self.image_dir, image_id))
 
             if self.clean_count % CHECKPOINT_FREQUENCY == 0:
-                pickle.dump((self.clean_count, self.dirty_count), open(input_index_file, 'wb')) #TODO test this indexing, and do it also at the lmdb level
+                pickle.dump((self.clean_count, self.dirty_count),
+                            open(input_index_file, 'wb'))
 
             if im is None:
                 print(os.path.join(self.image_dir, image_id), "is illegal!")
@@ -500,9 +504,16 @@ class CoCaDataFlow(RNGDataFlow):
             num_boxes = []
             for single_boxes, single_feats, single_scores, scale in zip(boxes, feats, scores, data_dict[
                 'im_scale']):
-                single_boxes = single_boxes.tensor # TODO if I drop the BUABox wrapper here, and don't need it anywhere else, maybe drop it alltogether
+                single_boxes = single_boxes.tensor  # TODO if I drop the BUABox wrapper here, and don't need it anywhere else, maybe drop it alltogether
                 og_boxes = single_boxes / scale  # Nathan
-                keep_idxs_single = filter_keep_boxes(og_boxes, self.cfg, single_scores)
+                try:
+                    keep_idxs_single = filter_keep_boxes(og_boxes, self.cfg, single_scores)
+                except RuntimeError as e:
+                    print(e)
+                    print("Input at time of error",data_dict['img_id'])
+                    self.img_to_input_df.ds.clean_count -= 1
+                    self.img_to_input_df.ds.dirty_count += 1
+                    continue
                 keep_idxs.append(keep_idxs_single)
 
                 keep_feats.append(single_feats[keep_idxs_single])
@@ -525,7 +536,8 @@ def main():
     ds = CoCaDataFlow(cfg, args)
 
     print(f"Conceptual_Caption init done after {time() - start}")
-    MyLMDBSerializer.save(ds, str(Path(ROOT_DIR, 'DeVLBert', f'features_lmdb/CC/{FGS.lmdb_file}.lmdb')),write_frequency=CHECKPOINT_FREQUENCY)
+    MyLMDBSerializer.save(ds, str(Path(FGS.lmdb_folder,f'{FGS.lmdb_file}.lmdb')),
+                          write_frequency=CHECKPOINT_FREQUENCY)
     print(f"Done after {time() - start}")
 
 
