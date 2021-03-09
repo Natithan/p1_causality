@@ -13,7 +13,7 @@ flags.DEFINE_string("image_dir", "/cw/liir/NoCsBack/testliir/datasets/Conceptual
 flags.DEFINE_integer("max_nb_images", -1, "")
 flags.DEFINE_integer("batch_size", 6, "")
 flags.DEFINE_integer("num_cpus", 32, "")
-flags.DEFINE_string("gpus", "1,2,3", "")
+flags.DEFINE_string("gpus", "0,1,2,3", "")
 flags.DEFINE_list("min_max_boxes", [0, 1, 2, 3], "")
 flags.DEFINE_string("extract_mode", "roi_feats", "")
 flags.DEFINE_string("config_file", "buatest/configs/bua-caffe/extract-bua-caffe-r101.yaml", "")
