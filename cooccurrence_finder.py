@@ -2,6 +2,7 @@ import os
 
 import pickle
 import ray
+import spacy
 import time
 from argparse import Namespace
 import numpy as np
@@ -24,7 +25,7 @@ args = Namespace(bbox_dir='bbox',
                  opts=[],
                  output_dir='features',
                  resume=False,
-                 visual_features_lmdb="/cw/liir/NoCsBack/testliir/nathan/p1_causality/DeVLBert/features_lmdb/CC/full_coca.lmdb"
+                 visual_features_lmdb="/cw/working-arwen/nathan/features_CoCa_lmdb/full_coca_1.lmdb"
                  )
 
 
@@ -32,46 +33,70 @@ def main():  # TODO make this (a lot) faster
     ds = LMDBSerializer.load(args.visual_features_lmdb, shuffle=False)
     ds.reset_state()
     NB_CLASSES = 1601
-    count_file = 'cooc_counts_tmp_2'         # TODO run for big data
+    count_file = 'cooc_counts_tmp_2'  # TODO run for big data
     if os.path.exists(count_file):
-        total_count,joint_count = pickle.load(open(count_file,'rb'))
+        total_count, joint_count = pickle.load(open(count_file, 'rb'))
     else:
         joint_count, total_count = read_and_count(NB_CLASSES, ds)
-        pickle.dump((total_count,joint_count),open(count_file,'wb'))
+        pickle.dump((total_count, joint_count), open(count_file, 'wb'))
     marginal_count = joint_count.diagonal()
     marginal = marginal_count / total_count
 
     joint = joint_count / total_count
     independent_joint = np.outer(marginal, marginal)
     excess_joint = abs(joint - independent_joint)
-    relative_excess_joint = np.where(joint != 0,
-                                     abs(np.where(independent_joint !=0,
-                                                  np.log(joint/independent_joint),
-                                                  0)),
-                                         np.finfo(independent_joint.dtype).max)
+    rel_excess_joint = np.absolute(np.log(joint / independent_joint))
 
     with  open("DeVLBert/dic/objects_vocab.txt", "r") as vocab:
         object_list = ['background'] + [line.strip() for line in vocab]
-    THRESHOLDS = [0.005,0.01,0.05,0.1]
-    for THRESHOLD in THRESHOLDS:
-        for X_joint,X in ((excess_joint,"absolute"),(relative_excess_joint,"relative")):
-            significant_idxs= np.where(X_joint > THRESHOLD)
-            probs = X_joint[significant_idxs]
-            significant_pairs = [p for p in zip(*significant_idxs,probs) if (p[0] != p[1])] # Self-pairs are not interesting of course
-            word_pairs = [(object_list[i], object_list[j],prob) for (i, j,prob) in significant_pairs]
-            with open(f"word_pairs_{THRESHOLD}_{X}.txt", "w") as wp_file:
-                for p in sorted(word_pairs,key=lambda d: d[-1], reverse=True):
-                    wp_file.write(str(p) + "\r\n")
-            with open(f"word_pairs_no_background_{THRESHOLD}_{X}.txt", "w") as wp_file:
-                significant_pairs_no_background = [p for p in significant_pairs if not (0 in p[:2])]
-                word_pairs_no_background = [(object_list[i], object_list[j], prob) for (i, j, prob) in significant_pairs_no_background]
-                for p in sorted(word_pairs_no_background,key=lambda d: d[-1],reverse=True):
-                    wp_file.write(str(p) + "\r\n")
+
+    for X_joint, X in ((excess_joint, "absolute"), (rel_excess_joint, "relative")):
+
+        nan_filtered_idxs = np.where(~np.isnan(X_joint)) # Only relevant for rel_excess_joint in fact
+        filtered_idxs_zipped = [p for p in zip(*nan_filtered_idxs) if (0 not in p)]  # Not interested in pairs with <background>
+        filtered_idxs = (np.array([i for i, _ in filtered_idxs_zipped]), np.array([j for _, j in filtered_idxs_zipped]))  #unzip to be able to use as index
+        idxs_and_scores = filtered_idxs + (X_joint[filtered_idxs],)
+        CUTOFF = 1000
+        s = sorted([t for t in zip(*idxs_and_scores) if t[0] != t[1]], key=lambda t: t[2], reverse=True)[:CUTOFF] #not interested in self-pairs
+        w = result_tuple(joint_count, marginal_count, object_list, s)
+
+        write(X, w)
+
+        if X == "relative":
+            s2 = sorted([t for t in zip(*idxs_and_scores) if (t[-1] != float('inf')) and (t[0] != t[1])],
+                        key=lambda t: t[2], reverse=True)[:CUTOFF] # 'inf' only relevant for rel_excess_joint: pairs
+            # that never occur together are very many
+            w2 = result_tuple(joint_count, marginal_count, object_list, s2)
+            write(X+"_positive", w2)
+
+
+
+def write(name, tuple):
+    with open(f"word_pairs_{name}.txt", "w") as wp_file:
+        wp_file.truncate(0)
+        for p in tuple:
+            wp_file.write(str(p) + "\r\n")
+    with open(f"word_pairs_{name}.tsv", "w") as wp_file:
+        wp_file.truncate(0)
+        for p in tuple:
+            wp_file.write(f'{p[0]}\t{p[1]}\t{p[2]}\t{p[3][0]}\t{p[3][1]}\t{p[4]}' + "\r\n")
+
+
+def result_tuple(joint_count, marginal_count, object_list, s):
+    w = [(object_list[i[0]],
+          object_list[i[1]],
+          i[2],
+          (marginal_count[i[0]], marginal_count[i[1]]),
+          joint_count[i[0],i[1]]
+          )
+         for i in s]
+    return w
 
 
 def read_and_count(NB_CLASSES, ds):
     joint_count = np.zeros((NB_CLASSES, NB_CLASSES))
-    for total_count, (_, cls_probs, _, _, _, _, _, _) in tqdm(enumerate(ds.get_data()), total=len(ds)):
+    nlp = spacy.load('en_core_web_sm')
+    for total_count, (_, cls_probs, _, _, _, _, _, caption) in tqdm(enumerate(ds.get_data()), total=len(ds)):
         if total_count > 5000:
             print('Only doing first 5000 for debugging')
             break
@@ -87,6 +112,28 @@ def read_and_count(NB_CLASSES, ds):
                     continue
                 seen_j.append(j)
                 joint_count[i, j] += 1
+
+        # TODO finish this
+        doc = nlp(caption)
+        cn = [str(t) for t in doc if t.pos_ == "NOUN"]
+        # extend the data structures if new words encountered
+        for t1 in cn:
+            if t1 not in id_for_c_noun:
+                id_for_c_noun[t1] = len(id_for_c_noun)
+                c_joint_count = np.resize(c_joint_count, [i + 1 for i in c_joint_count.shape])
+            seen_t1 = []
+
+        seen_t1 = []
+        for n, t1 in enumerate(cn):
+            if t1 in seen_t1:
+                continue
+            seen_t1.append(t1)
+            seen_t2 = []
+            for t2 in cn[n:]:  # Also count self-cooccurrence to get marginal info on the diagonal
+                if t2 in seen_t2:
+                    continue
+                seen_t2.append(t2)
+                c_joint_count[id_for_c_noun[t1], id_for_c_noun[t2]] += 1
     return joint_count, total_count
 
 
