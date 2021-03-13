@@ -7,25 +7,21 @@ This script is a simplified version of the training script in detectron2/tools.
 """
 import pickle
 
-from absl.flags import argparse_flags
 from time import time
 import json
 import csv
 from pathlib import Path
-from tensorpack.dataflow import DataFlow, RNGDataFlow, PrefetchDataZMQ, LMDBSerializer, BatchData
+from tensorpack.dataflow import DataFlow, RNGDataFlow, LMDBSerializer, BatchData
 
-from constants import CHECKPOINT_FREQUENCY
+from constants import CHECKPOINT_FREQUENCY, ROOT_DIR, STORAGE_DIR, BUA_ROOT_DIR
 from tmp import MyLMDBSerializer
 from DeVLBert.tools.DownloadConcptualCaption.download_data import _file_name
-from tqdm import tqdm
 
 import sys
 import pandas as pd
 
-ROOT_DIR = "/cw/liir/NoCsBack/testliir/nathan/p1_causality"
 csv.field_size_limit(sys.maxsize)
 
-import argparse
 import os
 import sys
 import torch
@@ -34,18 +30,13 @@ import numpy as np
 
 sys.path.append('buatest/detectron2')
 
-import detectron2.utils.comm as comm
 from detectron2.checkpoint import DetectionCheckpointer
-from detectron2.data import build_detection_test_loader, build_detection_train_loader
 from detectron2.config import get_cfg
-from detectron2.engine import DefaultTrainer, default_setup, launch
-from detectron2.evaluation import COCOEvaluator, verify_results
+from detectron2.engine import DefaultTrainer, default_setup
 from detectron2.structures import Instances
 
-from buatest.utils.utils import mkdir, save_features
 from buatest.utils.extract_utils import get_image_blob, save_bbox, save_roi_features_by_bbox, save_roi_features, \
     prep_roi_features, filter_keep_boxes
-from buatest.utils.progress_bar import ProgressBar
 from models import add_config
 from models.bua.box_regression import BUABoxes
 from cfg import FGS
@@ -53,12 +44,11 @@ import ray
 from ray.actor import ActorHandle
 
 FIELDNAMES = ['image_id', 'image_w', 'image_h', 'num_boxes', 'boxes', 'features', 'cls_prob']
-BUA_ROOT_DIR = "buatest"
 os.environ['CUDA_VISIBLE_DEVICES'] = FGS.gpus
 import torch;
 
 torch._C._cuda_init()
-input_index_file = Path(FGS.lmdb_folder,f'{FGS.lmdb_file}_{FGS.index_file}')
+input_index_file = Path(FGS.lmdb_folder, f'{FGS.lmdb_file}_{FGS.index_file}')
 
 
 # --mode
@@ -285,7 +275,6 @@ def image_to_intermediate(cfg, im, img_file, model):
 def open_tsv(fname, folder):
     print("Opening %s Data File..." % fname)
     df = pd.read_csv(fname, sep='\t', names=["caption", "url"], usecols=range(0, 2))
-    # df = pd.read_csv(fname, sep='\t', names=["caption", "url"], usecols=range(0, 2), nrows=200)  # Nathan edited
     df['folder'] = folder
     print("Processing", len(df), " Images:")
     return df
@@ -306,26 +295,18 @@ class CoCaInputDataflow(DataFlow):
         self.num_files = len(self.image_ids)
         print('Number of images: {}.'.format(self.num_files))
 
-        caption_path = Path(ROOT_DIR, 'DeVLBert', 'features_lmdb/CC/caption_train.json')
+        # region Storing / loading captions
+        caption_file = 'caption_train.json'
+        caption_path = Path(STORAGE_DIR, caption_file)
+
         if os.path.exists(caption_path):
-            print(f"Not storing caption_train.json, already present at {caption_path}")
+            print(f"Not storing {caption_file}, already present at {caption_path}")
             self.captions = json.load(open(caption_path, 'r'))
         else:
-            @ray.remote
-            def index_captions(df):
-                captions = {}
-                for i, img in enumerate(df.iterrows()):
-                    caption = img[1]['caption']  # .decode("utf8")
-                    img_name = _file_name(img[1])
-                    image_id = img_name.split('/')[1]
-                    # image_id = str(i)
-                    captions[image_id] = caption
-                return captions
-
             df = open_tsv(Path(ROOT_DIR, 'DeVLBert/tools/DownloadConcptualCaption/Train_GCC-training.tsv'), 'training')
             print("Indexing captions ...")
             ray.init()
-            futures = [index_captions.remote(df[i::FGS.num_cpus]) for i in range(FGS.num_cpus)]
+            futures = [index_df_column.remote(df[i::FGS.num_cpus],'caption') for i in range(FGS.num_cpus)]
             l = ray.get(futures)
             self.captions = {}
             for d in l:
@@ -334,15 +315,18 @@ class CoCaInputDataflow(DataFlow):
             print(f"Storing caption_train.json ...")
             json.dump(self.captions, open(caption_path, 'w'))
             print(f"Done")
+        # endregion
 
         self.clean_count = 0
         self.dirty_count = 0
         if not FGS.from_scratch:
             if os.path.exists(input_index_file):
                 print("Starting from existing index")
-                self.clean_count, self.dirty_count = pickle.load(open(input_index_file, 'rb'))
+                with open(input_index_file, 'rb') as f:
+                    self.clean_count, self.dirty_count = pickle.load(f)
             else:
-                pickle.dump((self.clean_count, self.dirty_count), open(input_index_file, 'wb'))
+                with open(input_index_file, 'wb') as f:
+                    pickle.dump((self.clean_count, self.dirty_count), f)
 
     def total_count(self):
         return self.clean_count + self.dirty_count
@@ -371,7 +355,19 @@ class CoCaInputDataflow(DataFlow):
         return self.num_files
 
 
-from torch.nn.parallel._functions import Scatter, Gather
+@ray.remote
+def index_df_column(dataframe, df_column):
+    col_for_ids = {}
+    for i, img in enumerate(dataframe.iterrows()):
+        col = img[1][df_column]  # .decode("utf8")
+        img_name = _file_name(img[1])
+        image_id = img_name.split('/')[1]
+        # image_id = str(i)
+        col_for_ids[image_id] = col
+    return col_for_ids
+
+
+from torch.nn.parallel._functions import Scatter
 from torch.nn.parallel import DataParallel
 import torch
 
@@ -510,7 +506,7 @@ class CoCaDataFlow(RNGDataFlow):
                     keep_idxs_single = filter_keep_boxes(og_boxes, self.cfg, single_scores)
                 except RuntimeError as e:
                     print(e)
-                    print("Input at time of error",data_dict['img_id'])
+                    print("Input at time of error", data_dict['img_id'])
                     self.img_to_input_df.ds.clean_count -= 1
                     self.img_to_input_df.ds.dirty_count += 1
                     continue
@@ -536,7 +532,7 @@ def main():
     ds = CoCaDataFlow(cfg, args)
 
     print(f"Conceptual_Caption init done after {time() - start}")
-    MyLMDBSerializer.save(ds, str(Path(FGS.lmdb_folder,f'{FGS.lmdb_file}.lmdb')),
+    MyLMDBSerializer.save(ds, str(Path(FGS.lmdb_folder, f'{FGS.lmdb_file}.lmdb')),
                           write_frequency=CHECKPOINT_FREQUENCY)
     print(f"Done after {time() - start}")
 

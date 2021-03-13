@@ -3,8 +3,9 @@
   <component name="NewModuleRootManager">
     <content url="file://$MODULE_DIR$">
       <sourceFolder url="file://$MODULE_DIR$" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/easyturk/easyturk" isTestSource="false" />
     </content>
-    <orderEntry type="jdk" jdkName="BUATEST FRODO Remote Python 3.8.5 (sftp://nathan@frodo.cs.kuleuven.be:22/cw/liir/NoCsBack/testliir/nathan/miniconda3/envs/buatest/bin/python3.8)" jdkType="Python SDK" />
+    <orderEntry type="jdk" jdkName="BUATEST SAURON Remote Python 3.8.5 (sftp://nathan@sauron.cs.kuleuven.be:22/cw/liir/NoCsBack/testliir/nathan/miniconda3/envs/buatest/bin/python3.8)" jdkType="Python SDK" />
     <orderEntry type="sourceFolder" forTests="false" />
     <orderEntry type="module" module-name="buatest" />
     <orderEntry type="module" module-name="DeVLBert" />

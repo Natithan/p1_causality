@@ -80,6 +80,8 @@ def _reset_df_and_get_size(df):
         sz = 0
     return sz
 
+def enc(real_idx):
+    return u'{:08}'.format(real_idx).encode('ascii')
 
 class MyLMDBSerializer:
     """
@@ -171,7 +173,7 @@ class MyLMDBSerializer:
                 #     idxs[path] = real_idx
                 #     pickle.dump(idxs, open(FGS.lmdb_index_file,'wb'))
                 # txn = put_or_grow(txn, u'{:08}'.format(idx).encode('ascii'), dumps(dp))
-                txn = put_or_grow(txn, u'{:08}'.format(real_idx).encode('ascii'), dumps(dp))
+                txn = put_or_grow(txn, enc(real_idx), dumps(dp))
                 pbar.update()
                 # if (real_idx + 1) % write_frequency == 0:
                 if real_idx % write_frequency == 0:
@@ -180,13 +182,15 @@ class MyLMDBSerializer:
             txn.commit()
 
             # keys = [u'{:08}'.format(k).encode('ascii') for k in range(idx + 1)]
-            keys = [u'{:08}'.format(k).encode('ascii') for k in range(real_idx)]
+            keys = [enc(k) for k in range(real_idx)]
             with db.begin(write=True) as txn:
                 txn = put_or_grow(txn, b'__keys__', dumps(keys))
 
             logger.info("Flushing database ...")
             db.sync()
         db.close()
+
+
 
     @staticmethod
     def load(path, shuffle=True):

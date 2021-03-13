@@ -3,6 +3,13 @@
   <component name="CsvFileAttributes">
     <option name="attributeMap">
       <map>
+        <entry key="&lt;2faeb71e-22a2-436c-b951-38d90b4faff3&gt;\p1_causality\easyturk\rendered_template.html">
+          <value>
+            <Attribute>
+              <option name="separator" value=";" />
+            </Attribute>
+          </value>
+        </entry>
         <entry key="C:\Users\natha\AppData\Local\JetBrains\PyCharm2020.3\remote_sources\1539365460\81906985\tensorpack\dataflow\serialize.py">
           <value>
             <Attribute>
@@ -18,6 +25,27 @@
           </value>
         </entry>
         <entry key="\cooccurrence_finder.py">
+          <value>
+            <Attribute>
+              <option name="separator" value="," />
+            </Attribute>
+          </value>
+        </entry>
+        <entry key="\easyturk\easyturk\easyturk.py">
+          <value>
+            <Attribute>
+              <option name="separator" value=":" />
+            </Attribute>
+          </value>
+        </entry>
+        <entry key="\mturk.py">
+          <value>
+            <Attribute>
+              <option name="separator" value="," />
+            </Attribute>
+          </value>
+        </entry>
+        <entry key="\raw__img_text__to__lmdb_region_feats_text.py">
           <value>
             <Attribute>
               <option name="separator" value="," />
