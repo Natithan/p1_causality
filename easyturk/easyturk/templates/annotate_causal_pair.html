@@ -16,7 +16,9 @@
       font-weight: bold;
     }
     img {
-      height: 600px;
+        height: 300px;
+        max-width:100%;
+        border: 3px solid green;
     }
     img.example {
       height: 200px;
@@ -46,6 +48,29 @@
     div {
         font-size: 22px;
     }
+    #image-container{
+        box-sizing: border-box;
+        display: flex;
+        flex-wrap: nowrap;
+        justify-content: center;
+  border: 1px solid blue;
+    }
+    .flex-item {
+  margin: 1em;
+  position: relative;
+  text-align: center;
+  border: 1px solid red;
+  flex-basis: 250px;
+  max-width: 250px;
+  min-width: 60px;
+        align-self: center;
+}
+    .above-text {
+    position: absolute;
+    left: 50%;                        /* horizontal alignment */
+    top: -10px;                         /* vertical alignment */
+    transform: translate(-50%, -50%); /* precise centering; see link below */
+}
   </style>
 </head>
 <body>
@@ -71,42 +96,57 @@
   </div>
 </div>
 
-<div class='container tasks-container'>
+<div class='container examples-container'>
   <div class='container'>
-    <h2>
-        These are the object for which you have to annotate their causal relation. Also shown is an example scene where each object occurs,
-        and if the objects are positively correlated, a scene where both objects are present.
+    <h2 id="x-and-y-text">
+        The two objects to consider are:
     </h2>
-  </div>
+    <li>
+        To help your judgement, here is a randomly picked example scenes in our dataset with ...
+    </li>
+    </div>
+    <div id='image-container'></div>
+</div>
 
+<div class='container tasks-container'>
   <div class='container-fluid'>
-    <div class='row'>
-      <div class='col-12'>
-        <h2>
-            Also shown is an example scene where each object occurs, and if the objects are positively correlated,
-            a scene where both objects are present.
-        </h2>
-        <div id='image-container'>
-        </div>
-      </div>
-    </div>
     <br />
-    <br />
+    <h4>
+        Select the option that seems correct to you.
+    </h4>
     <div class='row justify-content-center'>
-      <div class='col-6'>
-        <h2>Select the option that seems correct to you.</h2>
-          <button id='x-to-y-btn' class='btn btn-lg btn-secondary'>causes</button>
-          <button id='y-to-x-btn' class='btn btn-lg btn-secondary'>causes</button>
-      </div>
-      <div class='col-6'>
-        <h2>If you selected "something else is influencing both variables", write here what that "something else" is (it does not have to be an object, but can be anything)</h2>
+          <input type="radio" id="x-to-y" name="cause-direction" value="x-to-y">
+          <label for="x-to-y" id="x-to-y-label"></label><br>
+          <input type="radio" id="y-to-x" name="cause-direction" value="y-to-x">
+          <label for="y-to-x" id="y-to-x-label"></label><br>
+          <input type="radio" id="z-to-xy" name="cause-direction" value="z-to-xy">
+          <label for="z-to-xy" id="z-to-xy-label"></label>
+          <div class='col'>
+            <button id='x-to-y-btn' class='btn btn-lg btn-secondary'></button>
+          </div>
+          <div class='col'>
+            <button id='y-to-x-btn' class='btn btn-lg btn-secondary'></button>
+          </div>
+          <div class='col'>
+            <button id='confounder-btn' class='btn btn-lg btn-secondary'></button>
+          </div>
+    </div>
+    <div class='row justify-content-center'>
+        <h4>If you selected "something else is influencing both variables", write here what that "something else" could be (it does not have to be an object, but can be anything)</h4>
         <textarea type="text" name="confounder" id='confounder' rows="3" cols='50'></textarea>
-      </div>
     </div>
 
-      <div class='row justify-content-center' style='margin-top: 10px; padding-bottom: 10px;'>
-        <h2>Tell us how confident you are in your choice on a scale of 1 (not sure at all) to 3 (very sure).</h2>
-    {#        <textarea type="text" name="caption" id='caption' rows="3" cols='50'></textarea> #TODO#}
+        <h4>Tell us how confident you are in your choice on a scale of 1 (not sure at all) to 3 (very sure).</h4>
+      <div id = 'confidence' class='row justify-content-center' style='margin-top: 10px; padding-bottom: 10px;'>
+          <div class='col-1'>
+            <button id='confidence-1' class='btn btn-lg btn-secondary' disabled>1</button>
+          </div>
+          <div class='col-1'>
+            <button id='confidence-2' class='btn btn-lg btn-secondary' disabled>2</button>
+          </div>
+          <div class='col-1'>
+            <button id='confidence-3' class='btn btn-lg btn-secondary' disabled>3</button>
+          </div>
       </div>
     <div class='row justify-content-center' style='margin-top: 10px; padding-bottom: 10px;'>
       <div class='col-1'>
@@ -139,18 +179,19 @@
             'word_X': 'shirt', 'word_Y': 'man'
         },
         {
-            'joint_url': 'https://media.gettyimages.com/photos/actors-chris-sarandon-and-catherine-hicks-with-child-actor-alex-in-a-picture-id118094872?s=612x612',
-            'marginal_url_x': 'https://media.gettyimages.com/photos/singer-mariah-carey-arrives-at-the-2015-billboard-music-awards-at-mgm-picture-id473817728?s=612x612',
-            'marginal_url_y': 'http://i2.wp.com/www.ofapplesandlemons.com/wp-content/uploads/2016/12/Angel-de-Leon-Jody-Ledesma.jpg',
-            'word_X': 'hair', 'word_Y': 'shirt'
-        }
+            'joint_url': '',
+            'marginal_url_x': 'https://ak0.picdn.net/shutterstock/videos/31507030/thumb/1.jpg',
+            'marginal_url_y': 'http://tandgflooring.com/wp-content/uploads/2015/06/BRAZCHE_BANANAREP_COM_02.jpg',
+            'word_X': 'tree',
+            'word_Y': 'wall'}
         ]
 
     var input = null;
 
-    // This is where we will be collecting the captions for each image;
-    var captions = [];
+    // This is where we will be collecting the responses for each image;
+    {#var captions = [];#}
 
+    var confounders = [];
     // Some variables to track state of the HIT.
     var idx = 0;
     var enabled = false;
@@ -166,14 +207,16 @@
       }
 
       // Set up the correct.
-      _.each(input, function() { captions.push(null); });
+      _.each(input, function() { confounders.push(null); });
 
       // Preload all images
       _.each(input, function(input_elem) {
-        var imgUrl = input_elem['url'];
-        var img = new Image();
-        img.onload = function() { console.log('loaded image from ' + imgUrl); };
-        img.src = imgUrl;
+          _.each(['joint_url','marginal_url_x','marginal_url_y'],function(img_key){
+              var imgUrl = input_elem[img_key];
+              var img = new Image();
+              img.onload = function() { console.log('loaded image from ' + imgUrl); };
+              img.src = imgUrl;
+          })
       });
 
       render();
@@ -181,23 +224,53 @@
 
     // Use the current index to update the image and description
     function render() {
-      // Set up the images
-      $('#image-container').empty();
-      $("<img style='width:100%; height:auto;'>").attr('src', input[idx]['joint_url']).appendTo($('#image-container'));
-      $("<img style='width:100%; height:auto;'>").attr('src', input[idx]['marginal_url_x']).appendTo($('#image-container'));
-      $("<img style='width:100%; height:auto;'>").attr('src', input[idx]['marginal_url_y']).appendTo($('#image-container'));
+        const X = input[idx]['word_X'];
+        const Y = input[idx]['word_Y'];
+
+        //Set up text showing variables
+        var xANDy = document.getElementById("x-and-y-text");
+        xANDy.innerHTML = xANDy.innerHTML + X.bold() + ' and ' + Y.bold();
+
+        // Set up the images
+        $('#image-container').empty();
+        var img_keys = ['marginal_url_x','marginal_url_y','joint_url'];
+        var word_for_img_keys = {'marginal_url_x':X,'marginal_url_y':Y,'joint_url':X + ' and ' + Y}
+        let count = img_keys.length;
+
+        for(var i = 0; i < count; i++) {
+            var img_key = img_keys[i];
+            let url = input[idx][img_key];
+            const newdiv = document.createElement( "div" );
+            newdiv.class='flex-item'
+            newdiv.style.textAlign = "center";
+            // and give it some content
+            const newContent = document.createTextNode(word_for_img_keys[img_key]);
+            var img = document.createElement('img');
+            img.src =  url
+            // add the text node to the newly created div
+            newdiv.appendChild(newContent);
+            newdiv.appendChild(img);
+            $( "#image-container" ).append( newdiv );
+       }
 
 
-      var xTOy = document.getElementById("x-to-y-btn");
-      var yTOx = document.getElementById("y-to-x-btn");
-      {#const obj = {xTOy:['word_X','word_Y'],yTOx:['word_Y','word_X']}#}
-      {#for (const btn in obj) {#}
-      {#    btn.textContent = 'Changing the presence of ' + input[idx][obj[btn][0]] + ' would influence the presence of ' + input[idx][obj[btn][1]]#}
-      {#}#}
-      xTOy.textContent = input[idx]['word_X'] + '-->'+input[idx]['word_Y']+': Changing the presence of ' + input[idx]['word_X'] + ' would influence the presence of ' + input[idx]['word_Y']
-      yTOx.textContent = 'Changing the presence of ' + input[idx]['word_Y'] + ' would influence the presence of ' + input[idx]['word_X']
-      // Set up the input text field
-      $('#caption').val(captions[idx]);
+      const attrs_for_radio_label_id = {"x-to-y-label":['word_X','word_Y'],'y-to-x-label':['word_Y','word_X']};
+      const l =["x-to-y-label","y-to-x-label"];
+      let count2 = l.length;
+      for(var i = 0; i < count2; i++) {
+          var radio_label_id = l[i];
+          var radio_label = document.getElementById(radio_label_id);
+          var first = input[idx][attrs_for_radio_label_id[radio_label_id][0]]
+          var second = input[idx][attrs_for_radio_label_id[radio_label_id][1]]
+          //btn.textContent = 'Changing the presence of ' + first + ' would influence the presence of ' + second; //TODO fix only having X --> Y on the button, and rest of the text after
+          radio_label.textContent = first + ' \u2192 ' + second;
+      }
+      var cradio_label = document.getElementById('z-to-xy-label');
+      cradio_label.textContent = X + ' \u2190 ' + 'something else' + ' \u2192 ' + Y
+
+
+      // Set up the input fields
+      $('#confounder').val(confounders[idx]);
 
       // Refresh the counter
       $('.counter-top').text(idx + 1);
@@ -224,15 +297,15 @@
       render();
     }
 
-    function saveCaption() {
-      var c = $('#caption').val();
+    function saveConfounder() {
+      var c = $('#confounder').val();
       var lc = c.toLowerCase();
       var numWords = lc.split(' ').length;
       if (numWords < 5) {
           alert('Your caption is too short. Please try to come up with a more specific caption.');
           return false;
       }
-      captions[idx] = c;
+      confounders[idx] = c;
       return true;
     }
 
@@ -243,12 +316,12 @@
 
       // Enable components
       $('#next-btn').click(function() {
-          if (saveCaption()) {
+          if (saveConfounder()) {
               setIdx(idx + 1);
           }
       });
       $('#prev-btn').click(function() {
-          if (saveCaption()) {
+          if (saveConfounder()) {
               setIdx(idx - 1);
           }
       });
@@ -256,11 +329,11 @@
 
       $('#submit-btn').click(function() {
         // Make sure to save the last one.
-        if (!saveCaption()) {
+        if (!saveConfounder()) {
           return false;
         }
         for (var i = 0; i < input.length; i++) {
-          if (captions[i] == null || captions[i].length == 0) {
+          if (confounders[i] == null || confounders[i].length == 0) {
             alert('You did not write a caption for #' + (i+1));
             return false;
           }
@@ -269,7 +342,7 @@
         // Copy the url and captions to the output we will return to the requester.
         var output = input;
         for (var i = 0; i < output.length; i++) {
-          output[i]['caption'] = captions[i];
+          output[i]['response'] = confounders[i];
         }
         if (easyturk.isPreview()) {
           alert("This is only a preview. Here is your output: \n" + JSON.stringify(output));

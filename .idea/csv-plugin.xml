@@ -38,6 +38,13 @@
             </Attribute>
           </value>
         </entry>
+        <entry key="\easyturk\easyturk\templates\annotate_causal_pair.html">
+          <value>
+            <Attribute>
+              <option name="separator" value=";" />
+            </Attribute>
+          </value>
+        </entry>
         <entry key="\mturk.py">
           <value>
             <Attribute>
