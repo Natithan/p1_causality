@@ -1,0 +1,302 @@
+<QuestionForm xmlns="http://mechanicalturk.amazonaws.com/AWSMechanicalTurkDataSchemas/2017-11-06/QuestionForm.xsd">
+	<Overview>
+		<Title>Causation or only correlation?</Title>
+	</Overview>
+	<Question>
+		<QuestionIdentifier>q_0</QuestionIdentifier>
+		<DisplayName>Question 0</DisplayName>
+		<IsRequired>true</IsRequired>
+		<QuestionContent>
+			<Text>umbrella - puddle</Text>
+		</QuestionContent>
+		<AnswerSpecification>
+			<SelectionAnswer>
+				<StyleSuggestion>radiobutton</StyleSuggestion>
+				<Selections>
+					<Selection>
+						<SelectionIdentifier>x-to-y</SelectionIdentifier>
+						<Text>umbrella → puddle</Text>
+					</Selection>
+					<Selection>
+						<SelectionIdentifier>y-to-x</SelectionIdentifier>
+						<Text>puddle → umbrella</Text>
+					</Selection>
+					<Selection>
+						<SelectionIdentifier>z-to-xy</SelectionIdentifier>
+						<Text>umbrella ← something else → puddle</Text>
+					</Selection>
+				</Selections>
+			</SelectionAnswer>
+		</AnswerSpecification>
+	</Question>
+	<Question>
+		<QuestionIdentifier>q_1</QuestionIdentifier>
+		<DisplayName>Question 1</DisplayName>
+		<IsRequired>true</IsRequired>
+		<QuestionContent>
+			<Text>Avalanche - snow-covered house</Text>
+		</QuestionContent>
+		<AnswerSpecification>
+			<SelectionAnswer>
+				<StyleSuggestion>radiobutton</StyleSuggestion>
+				<Selections>
+					<Selection>
+						<SelectionIdentifier>x-to-y</SelectionIdentifier>
+						<Text>Avalanche → snow-covered house</Text>
+					</Selection>
+					<Selection>
+						<SelectionIdentifier>y-to-x</SelectionIdentifier>
+						<Text>snow-covered house → Avalanche</Text>
+					</Selection>
+					<Selection>
+						<SelectionIdentifier>z-to-xy</SelectionIdentifier>
+						<Text>Avalanche ← something else → snow-covered house</Text>
+					</Selection>
+				</Selections>
+			</SelectionAnswer>
+		</AnswerSpecification>
+	</Question>
+	<Question>
+		<QuestionIdentifier>q_2</QuestionIdentifier>
+		<DisplayName>Question 2</DisplayName>
+		<IsRequired>true</IsRequired>
+		<QuestionContent>
+			<Text>snow-covered car - snow-covered house</Text>
+		</QuestionContent>
+		<AnswerSpecification>
+			<SelectionAnswer>
+				<StyleSuggestion>radiobutton</StyleSuggestion>
+				<Selections>
+					<Selection>
+						<SelectionIdentifier>x-to-y</SelectionIdentifier>
+						<Text>snow-covered car → snow-covered house</Text>
+					</Selection>
+					<Selection>
+						<SelectionIdentifier>y-to-x</SelectionIdentifier>
+						<Text>snow-covered house → snow-covered car</Text>
+					</Selection>
+					<Selection>
+						<SelectionIdentifier>z-to-xy</SelectionIdentifier>
+						<Text>snow-covered car ← something else → snow-covered house</Text>
+					</Selection>
+				</Selections>
+			</SelectionAnswer>
+		</AnswerSpecification>
+	</Question>
+	<Question>
+		<QuestionIdentifier>q_3</QuestionIdentifier>
+		<DisplayName>Question 3</DisplayName>
+		<IsRequired>true</IsRequired>
+		<QuestionContent>
+			<Text>sunscreen - sunglasses</Text>
+		</QuestionContent>
+		<AnswerSpecification>
+			<SelectionAnswer>
+				<StyleSuggestion>radiobutton</StyleSuggestion>
+				<Selections>
+					<Selection>
+						<SelectionIdentifier>x-to-y</SelectionIdentifier>
+						<Text>sunscreen → sunglasses</Text>
+					</Selection>
+					<Selection>
+						<SelectionIdentifier>y-to-x</SelectionIdentifier>
+						<Text>sunglasses → sunscreen</Text>
+					</Selection>
+					<Selection>
+						<SelectionIdentifier>z-to-xy</SelectionIdentifier>
+						<Text>sunscreen ← something else → sunglasses</Text>
+					</Selection>
+				</Selections>
+			</SelectionAnswer>
+		</AnswerSpecification>
+	</Question>
+	<Question>
+		<QuestionIdentifier>q_4</QuestionIdentifier>
+		<DisplayName>Question 4</DisplayName>
+		<IsRequired>true</IsRequired>
+		<QuestionContent>
+			<Text>umbrella - rain</Text>
+		</QuestionContent>
+		<AnswerSpecification>
+			<SelectionAnswer>
+				<StyleSuggestion>radiobutton</StyleSuggestion>
+				<Selections>
+					<Selection>
+						<SelectionIdentifier>x-to-y</SelectionIdentifier>
+						<Text>umbrella → rain</Text>
+					</Selection>
+					<Selection>
+						<SelectionIdentifier>y-to-x</SelectionIdentifier>
+						<Text>rain → umbrella</Text>
+					</Selection>
+					<Selection>
+						<SelectionIdentifier>z-to-xy</SelectionIdentifier>
+						<Text>umbrella ← something else → rain</Text>
+					</Selection>
+				</Selections>
+			</SelectionAnswer>
+		</AnswerSpecification>
+	</Question>
+	<Question>
+		<QuestionIdentifier>q_5</QuestionIdentifier>
+		<DisplayName>Question 5</DisplayName>
+		<IsRequired>true</IsRequired>
+		<QuestionContent>
+			<Text>Sunny sky - sunglasses</Text>
+		</QuestionContent>
+		<AnswerSpecification>
+			<SelectionAnswer>
+				<StyleSuggestion>radiobutton</StyleSuggestion>
+				<Selections>
+					<Selection>
+						<SelectionIdentifier>x-to-y</SelectionIdentifier>
+						<Text>Sunny sky → sunglasses</Text>
+					</Selection>
+					<Selection>
+						<SelectionIdentifier>y-to-x</SelectionIdentifier>
+						<Text>sunglasses → Sunny sky</Text>
+					</Selection>
+					<Selection>
+						<SelectionIdentifier>z-to-xy</SelectionIdentifier>
+						<Text>Sunny sky ← something else → sunglasses</Text>
+					</Selection>
+				</Selections>
+			</SelectionAnswer>
+		</AnswerSpecification>
+	</Question>
+	<Question>
+		<QuestionIdentifier>q_6</QuestionIdentifier>
+		<DisplayName>Question 6</DisplayName>
+		<IsRequired>true</IsRequired>
+		<QuestionContent>
+			<Text>spider - scared face</Text>
+		</QuestionContent>
+		<AnswerSpecification>
+			<SelectionAnswer>
+				<StyleSuggestion>radiobutton</StyleSuggestion>
+				<Selections>
+					<Selection>
+						<SelectionIdentifier>x-to-y</SelectionIdentifier>
+						<Text>spider → scared face</Text>
+					</Selection>
+					<Selection>
+						<SelectionIdentifier>y-to-x</SelectionIdentifier>
+						<Text>scared face → spider</Text>
+					</Selection>
+					<Selection>
+						<SelectionIdentifier>z-to-xy</SelectionIdentifier>
+						<Text>spider ← something else → scared face</Text>
+					</Selection>
+				</Selections>
+			</SelectionAnswer>
+		</AnswerSpecification>
+	</Question>
+	<Question>
+		<QuestionIdentifier>q_7</QuestionIdentifier>
+		<DisplayName>Question 7</DisplayName>
+		<IsRequired>true</IsRequired>
+		<QuestionContent>
+			<Text>spider - happy face</Text>
+		</QuestionContent>
+		<AnswerSpecification>
+			<SelectionAnswer>
+				<StyleSuggestion>radiobutton</StyleSuggestion>
+				<Selections>
+					<Selection>
+						<SelectionIdentifier>x-to-y</SelectionIdentifier>
+						<Text>spider → happy face</Text>
+					</Selection>
+					<Selection>
+						<SelectionIdentifier>y-to-x</SelectionIdentifier>
+						<Text>happy face → spider</Text>
+					</Selection>
+					<Selection>
+						<SelectionIdentifier>z-to-xy</SelectionIdentifier>
+						<Text>spider ← something else → happy face</Text>
+					</Selection>
+				</Selections>
+			</SelectionAnswer>
+		</AnswerSpecification>
+	</Question>
+	<Question>
+		<QuestionIdentifier>q_8</QuestionIdentifier>
+		<DisplayName>Question 8</DisplayName>
+		<IsRequired>true</IsRequired>
+		<QuestionContent>
+			<Text>cold weather - shorts</Text>
+		</QuestionContent>
+		<AnswerSpecification>
+			<SelectionAnswer>
+				<StyleSuggestion>radiobutton</StyleSuggestion>
+				<Selections>
+					<Selection>
+						<SelectionIdentifier>x-to-y</SelectionIdentifier>
+						<Text>cold weather → shorts</Text>
+					</Selection>
+					<Selection>
+						<SelectionIdentifier>y-to-x</SelectionIdentifier>
+						<Text>shorts → cold weather</Text>
+					</Selection>
+					<Selection>
+						<SelectionIdentifier>z-to-xy</SelectionIdentifier>
+						<Text>cold weather ← something else → shorts</Text>
+					</Selection>
+				</Selections>
+			</SelectionAnswer>
+		</AnswerSpecification>
+	</Question>
+	<Question>
+		<QuestionIdentifier>q_9</QuestionIdentifier>
+		<DisplayName>Question 9</DisplayName>
+		<IsRequired>true</IsRequired>
+		<QuestionContent>
+			<Text>a winter coat - shorts</Text>
+		</QuestionContent>
+		<AnswerSpecification>
+			<SelectionAnswer>
+				<StyleSuggestion>radiobutton</StyleSuggestion>
+				<Selections>
+					<Selection>
+						<SelectionIdentifier>x-to-y</SelectionIdentifier>
+						<Text>a winter coat → shorts</Text>
+					</Selection>
+					<Selection>
+						<SelectionIdentifier>y-to-x</SelectionIdentifier>
+						<Text>shorts → a winter coat</Text>
+					</Selection>
+					<Selection>
+						<SelectionIdentifier>z-to-xy</SelectionIdentifier>
+						<Text>a winter coat ← something else → shorts</Text>
+					</Selection>
+				</Selections>
+			</SelectionAnswer>
+		</AnswerSpecification>
+	</Question>
+	<Question>
+		<QuestionIdentifier>q_10</QuestionIdentifier>
+		<DisplayName>Question 10</DisplayName>
+		<IsRequired>true</IsRequired>
+		<QuestionContent>
+			<Text>happy child face - cute bunny</Text>
+		</QuestionContent>
+		<AnswerSpecification>
+			<SelectionAnswer>
+				<StyleSuggestion>radiobutton</StyleSuggestion>
+				<Selections>
+					<Selection>
+						<SelectionIdentifier>x-to-y</SelectionIdentifier>
+						<Text>happy child face → cute bunny</Text>
+					</Selection>
+					<Selection>
+						<SelectionIdentifier>y-to-x</SelectionIdentifier>
+						<Text>cute bunny → happy child face</Text>
+					</Selection>
+					<Selection>
+						<SelectionIdentifier>z-to-xy</SelectionIdentifier>
+						<Text>happy child face ← something else → cute bunny</Text>
+					</Selection>
+				</Selections>
+			</SelectionAnswer>
+		</AnswerSpecification>
+	</Question>
+</QuestionForm>

@@ -10,24 +10,19 @@ import math
 import sys
 from time import strftime
 from timeit import default_timer as timer
-
 import numpy as np
 from tqdm import tqdm, trange
-
 import torch
 from torch.utils.data import DataLoader, Dataset, RandomSampler
 from torch.utils.data.distributed import DistributedSampler
 from tensorboardX import SummaryWriter
-
 from pytorch_pretrained_bert.tokenization import BertTokenizer
 from pytorch_pretrained_bert.optimization import BertAdam, WarmupLinearSchedule
-
 from devlbert.datasets import ConceptCapLoaderTrain, ConceptCapLoaderVal
 from devlbert.devlbert import BertForMultiModalPreTraining, BertConfig
 import torch.distributed as dist
-
 import pdb
-
+from time import gmtime
 logging.basicConfig(
     format="%(asctime)s - %(levelname)s - %(name)s -   %(message)s",
     datefmt="%m/%d/%Y %H:%M:%S",
@@ -214,7 +209,7 @@ def main():
     else:
         from devlbert.devlbert import BertForMultiModalPreTraining, BertConfig
 
-    print(args)
+    print('\r\n'.join(f'{k}: {v}' for k,v in args.__dict__.items()))
     if args.save_name is not '':
         timeStamp = args.save_name
     else:
@@ -406,7 +401,8 @@ def main():
         optimizer_grouped_parameters = []
         for key, value in dict(model.named_parameters()).items():
             if value.requires_grad:
-                if key[12:] in bert_weight_name:
+                # if key[12:] in bert_weight_name:
+                if key[5:] in bert_weight_name: # Nathan: starts with "bert.", guess the 12: was for an old version
                     lr = args.learning_rate * 0.1
                 else:
                     lr = args.learning_rate

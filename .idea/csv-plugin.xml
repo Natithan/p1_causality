@@ -17,6 +17,41 @@
             </Attribute>
           </value>
         </entry>
+        <entry key="\DeVLBert\devlbert\datasets\concept_cap_dataset.py">
+          <value>
+            <Attribute>
+              <option name="separator" value="," />
+            </Attribute>
+          </value>
+        </entry>
+        <entry key="\DeVLBert\devlbert\datasets\test_imports_tmp.py">
+          <value>
+            <Attribute>
+              <option name="separator" value="," />
+            </Attribute>
+          </value>
+        </entry>
+        <entry key="\DeVLBert\devlbert\datasets\tmp.py">
+          <value>
+            <Attribute>
+              <option name="separator" value="," />
+            </Attribute>
+          </value>
+        </entry>
+        <entry key="\DeVLBert\train.sh">
+          <value>
+            <Attribute>
+              <option name="separator" value="," />
+            </Attribute>
+          </value>
+        </entry>
+        <entry key="\DeVLBert\train_concap.py">
+          <value>
+            <Attribute>
+              <option name="separator" value="," />
+            </Attribute>
+          </value>
+        </entry>
         <entry key="\buatest\models\bua\nathan_test.py">
           <value>
             <Attribute>
@@ -25,6 +60,13 @@
           </value>
         </entry>
         <entry key="\cooccurrence_finder.py">
+          <value>
+            <Attribute>
+              <option name="separator" value="," />
+            </Attribute>
+          </value>
+        </entry>
+        <entry key="\count_triplets.py">
           <value>
             <Attribute>
               <option name="separator" value="," />
@@ -52,6 +94,48 @@
             </Attribute>
           </value>
         </entry>
+        <entry key="\mturk\create_qualification_test.py">
+          <value>
+            <Attribute>
+              <option name="separator" value="," />
+            </Attribute>
+          </value>
+        </entry>
+        <entry key="\mturk\create_question_form.py">
+          <value>
+            <Attribute>
+              <option name="separator" value="," />
+            </Attribute>
+          </value>
+        </entry>
+        <entry key="\mturk\mturk_gather_hits.py">
+          <value>
+            <Attribute>
+              <option name="separator" value="," />
+            </Attribute>
+          </value>
+        </entry>
+        <entry key="\mturk\mturk_submit_hits.py">
+          <value>
+            <Attribute>
+              <option name="separator" value="," />
+            </Attribute>
+          </value>
+        </entry>
+        <entry key="\mturk\questionForm.xml">
+          <value>
+            <Attribute>
+              <option name="separator" value=":" />
+            </Attribute>
+          </value>
+        </entry>
+        <entry key="\mturk_gather_hits.py">
+          <value>
+            <Attribute>
+              <option name="separator" value="," />
+            </Attribute>
+          </value>
+        </entry>
         <entry key="\raw__img_text__to__lmdb_region_feats_text.py">
           <value>
             <Attribute>
@@ -60,6 +144,13 @@
           </value>
         </entry>
         <entry key="\tmp.py">
+          <value>
+            <Attribute>
+              <option name="separator" value="," />
+            </Attribute>
+          </value>
+        </entry>
+        <entry key="\tmpp.py">
           <value>
             <Attribute>
               <option name="separator" value="," />

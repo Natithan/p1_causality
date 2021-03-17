@@ -11,20 +11,19 @@ from time import time
 import json
 import csv
 from pathlib import Path
-from tensorpack.dataflow import DataFlow, RNGDataFlow, LMDBSerializer, BatchData
+from tensorpack.dataflow import DataFlow, RNGDataFlow, BatchData
 
 from constants import CHECKPOINT_FREQUENCY, ROOT_DIR, STORAGE_DIR, BUA_ROOT_DIR
 from tmp import MyLMDBSerializer
-from DeVLBert.tools.DownloadConcptualCaption.download_data import _file_name
 
 import sys
-import pandas as pd
+
+from util import index_df_column, open_tsv
 
 csv.field_size_limit(sys.maxsize)
 
 import os
 import sys
-import torch
 import cv2
 import numpy as np
 
@@ -272,14 +271,6 @@ def image_to_intermediate(cfg, im, img_file, model):
     return image_bboxes, image_feat, info, keep_boxes
 
 
-def open_tsv(fname, folder):
-    print("Opening %s Data File..." % fname)
-    df = pd.read_csv(fname, sep='\t', names=["caption", "url"], usecols=range(0, 2))
-    df['folder'] = folder
-    print("Processing", len(df), " Images:")
-    return df
-
-
 class CoCaInputDataflow(DataFlow):
     def __init__(self, image_dir, max_nb_images=-1):
 
@@ -306,7 +297,7 @@ class CoCaInputDataflow(DataFlow):
             df = open_tsv(Path(ROOT_DIR, 'DeVLBert/tools/DownloadConcptualCaption/Train_GCC-training.tsv'), 'training')
             print("Indexing captions ...")
             ray.init()
-            futures = [index_df_column.remote(df[i::FGS.num_cpus],'caption') for i in range(FGS.num_cpus)]
+            futures = [index_df_column.remote(df[i::FGS.num_cpus], 'caption') for i in range(FGS.num_cpus)]
             l = ray.get(futures)
             self.captions = {}
             for d in l:
@@ -353,18 +344,6 @@ class CoCaInputDataflow(DataFlow):
 
     def __len__(self):
         return self.num_files
-
-
-@ray.remote
-def index_df_column(dataframe, df_column):
-    col_for_ids = {}
-    for i, img in enumerate(dataframe.iterrows()):
-        col = img[1][df_column]  # .decode("utf8")
-        img_name = _file_name(img[1])
-        image_id = img_name.split('/')[1]
-        # image_id = str(i)
-        col_for_ids[image_id] = col
-    return col_for_ids
 
 
 from torch.nn.parallel._functions import Scatter

@@ -14,13 +14,14 @@ import numpy as np
 from tensorpack import LMDBSerializer
 from tqdm import tqdm
 
-from constants import LMDB_PATH, ROOT_DIR
+from constants import LMDB_PATH, ROOT_DIR, MTURK_DIR
 from raw__img_text__to__lmdb_region_feats_text import CoCaDataFlow, setup
-
+IMG_ONLY = True
+COUNT_FILE = 'cooc_counts_img'
 # region Flags stuff
 FGS = flags.FLAGS
 flags.DEFINE_bool("sandbox", True, "")
-flags.DEFINE_integer("max_count", 5000, "")
+flags.DEFINE_integer("max_count", -1, "")
 FGS(sys.argv)
 
 
@@ -31,15 +32,21 @@ def main():  # TODO make this (a lot) faster
     ds = LMDBSerializer.load(LMDB_PATH, shuffle=False)
     ds.reset_state()
     NB_CLASSES = 1601
-    count_file = 'cooc_counts_tmp'  # TODO run for big data
-    if os.path.exists(count_file):
-        with open(count_file, 'rb') as f:
-            img_joint_count, c_joint_count, id_for_c_noun, total_count, img_id_for_img_idx_pair, img_id_for_c_idx_pair = pickle.load(
+    if os.path.exists(COUNT_FILE):
+        with open(COUNT_FILE, 'rb') as f:
+            if IMG_ONLY:
+                with open(COUNT_FILE, 'rb') as f:
+                    img_joint_count, total_count, img_id_for_img_idx_pair = pickle.load(
+                        f)
+                    c_joint_count, id_for_c_noun, img_id_for_c_idx_pair = None, None, None
+            else:
+                img_joint_count, c_joint_count, id_for_c_noun, total_count, img_id_for_img_idx_pair, img_id_for_c_idx_pair = pickle.load(
                 f)
     else:
+        raise Exception("Halt! Count file creation needs to be updated: creates unnecessarily ids_for_pair dicts atm")
         img_joint_count, c_joint_count, id_for_c_noun, total_count, img_id_for_img_idx_pair, img_id_for_c_idx_pair = read_and_count(
             NB_CLASSES, ds)
-        with open(count_file, 'wb') as f:
+        with open(COUNT_FILE, 'wb') as f:
             pickle.dump((img_joint_count, c_joint_count, id_for_c_noun, total_count, img_id_for_img_idx_pair,
                          img_id_for_c_idx_pair), f)
 
@@ -51,7 +58,9 @@ def main():  # TODO make this (a lot) faster
                                                                   (img_joint_count, c_joint_count),
                                                                   (id_for_img_noun, id_for_c_noun),
                                                                   (img_id_for_img_idx_pair, img_id_for_c_idx_pair)):
-
+        if mod == "caption":
+            print("Skipping caption nouns creating, as count file creation for that still needs to be updated")
+            break
         noun_for_id = {i: n for (n, i) in id_for_noun.items()}
 
         marginal_count = joint_count.diagonal()
@@ -73,7 +82,14 @@ def main():  # TODO make this (a lot) faster
             CUTOFF = 1000
             s = sorted([t for t in zip(*idxs_and_scores) if t[0] != t[1]], key=lambda t: abs(t[2]), reverse=True)[
                 :CUTOFF]  # not interested in self-pairs
+
             w = result_dict(joint_count, marginal_count, noun_for_id, s, img_id_for_idx_pair)
+
+            # Filter pairs like ('toy','toys) or ('stovetop', 'stove top')
+            w = [d for d in w if not (
+                    (d['words'][0] == d['words'][1] + 's') or (d['words'][1] == d['words'][0] + 's') or
+                    d['words'][0].replace(" ", "") == d['words'][1].replace(" ", "")
+            )]
 
             write_dict_to_tsv(X, w)
 
@@ -82,12 +98,18 @@ def main():  # TODO make this (a lot) faster
                             key=lambda t: abs(t[2]), reverse=True)[
                      :CUTOFF]  # 'inf' only relevant for rel_excess_joint: pairs
                 # that never occur together are very many
+                # Filter pairs like ('toy','toys) or ('stovetop', 'stove top')
+
                 w2 = result_dict(joint_count, marginal_count, noun_for_id, s2, img_id_for_idx_pair)
+                w2 = [d for d in w2 if not (
+                        (d['words'][0] == d['words'][1] + 's') or (d['words'][1] == d['words'][0] + 's') or
+                        d['words'][0].replace(" ", "") == d['words'][1].replace(" ", "")
+                )]
                 write_dict_to_tsv(X + "_positive", w2)
 
 
 def write_dict_to_tsv(name, dic):
-    output_dir = Path(ROOT_DIR, 'input_mturk')
+    output_dir = Path(MTURK_DIR, 'input_mturk')
     if not Path.exists(output_dir):
         Path.mkdir(output_dir)
     with open(Path(output_dir, f"{name}.tsv"), "w") as wp_file:
@@ -124,7 +146,6 @@ def read_and_count(NB_CLASSES, ds):
         if (FGS.max_count > 0) and (total_count > FGS.max_count):
             print(f'\r\nOnly doing first {FGS.max_count} for debugging')
             break
-        # TODO should I only put elements in the joint count in the upper (or lower) triangle?
         # Image object co-occurrences
         cls_idxs = np.argmax(cls_probs, 1)
         cls_idxs = list(set(

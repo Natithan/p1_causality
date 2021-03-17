@@ -1,4 +1,6 @@
 import os
+import pandas as pd
+import ray
 
 from PIL import Image
 import matplotlib.pyplot as plt
@@ -6,7 +8,9 @@ from matplotlib.patches import Rectangle
 import random
 import numpy as np
 
-with  open("DeVLBert/dic/objects_vocab.txt", "r") as vocab:
+from tools.DownloadConcptualCaption.download_data import _file_name
+
+with open("/cw/liir/NoCsBack/testliir/nathan/p1_causality/DeVLBert/dic/objects_vocab.txt", "r") as vocab:
     CLASSES = ['background'] + [line.strip() for line in vocab]
 
 IMAGE_DIR = "/cw/liir/NoCsBack/testliir/datasets/ConceptualCaptions/training"
@@ -29,3 +33,23 @@ def show_from_tuple(rpn_tuple):
         ax.add_patch(rect)
     plt.figtext(0.5, 0.01, caption, wrap=True, horizontalalignment='center', fontsize=12)
     plt.show()
+
+
+@ray.remote
+def index_df_column(dataframe, df_column):
+    col_for_ids = {}
+    for i, img in enumerate(dataframe.iterrows()):
+        col = img[1][df_column]  # .decode("utf8")
+        img_name = _file_name(img[1])
+        image_id = img_name.split('/')[1]
+        # image_id = str(i)
+        col_for_ids[image_id] = col
+    return col_for_ids
+
+
+def open_tsv(fname, folder):
+    print("Opening %s Data File..." % fname)
+    df = pd.read_csv(fname, sep='\t', names=["caption", "url"], usecols=range(0, 2))
+    df['folder'] = folder
+    print("Processing", len(df), " Images:")
+    return df

@@ -9,6 +9,7 @@ import numpy as np
 import tensorpack.dataflow as td
 
 import torch
+from constants import LMDB_PATH, CAPTION_PATH
 from torch.utils.data import Dataset
 from torch.utils.data.sampler import Sampler
 import torch.distributed as dist
@@ -132,10 +133,10 @@ class ConceptCapLoaderTrain(object):
         else:
             # lmdb_file = "/coc/dataset/conceptual_caption/training_feat_all.lmdb"
             # if not os.path.exists(lmdb_file):
-            lmdb_file = "/cw/liir/NoCsBack/testliir/nathan/DeVLBert/features_lmdb/CC/training_feat_all.lmdb"
+            lmdb_file = LMDB_PATH
             # lmdb_file = "/mnt3/xuesheng/features_lmdb/CC/training_feat_part_0.lmdb" #Nathan
 
-        caption_path = "/cw/liir/NoCsBack/testliir/nathan/DeVLBert/features_lmdb/CC/caption_train.json"
+        caption_path = CAPTION_PATH
         # caption_path = "/mnt3/xuesheng/features_lmdb/CC/caption_train.json"
         print("Loading from %s" % lmdb_file)
 
@@ -159,7 +160,7 @@ class ConceptCapLoaderTrain(object):
         # ds = td.PrefetchDataZMQ(ds, num_workers) Nathan commenting out in hope of bypassing forking-debugger incompatibility
         self.ds = td.BatchData(ds, batch_size)
         # self.ds = ds
-        self.ds.reset_state() #Nathan: this line messes up debugging, but not running (or at least not until later)
+        self.ds.reset_state()
 
         self.batch_size = batch_size
         self.num_workers = num_workers
