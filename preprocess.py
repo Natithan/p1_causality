@@ -6,28 +6,26 @@ TridentNet Training Script.
 This script is a simplified version of the training script in detectron2/tools.
 """
 import pickle
-
 from time import time
 import json
 import csv
 from pathlib import Path
 from tensorpack.dataflow import DataFlow, RNGDataFlow, BatchData
-
 from constants import CHECKPOINT_FREQUENCY, ROOT_DIR, STORAGE_DIR, BUA_ROOT_DIR
-from tmp import MyLMDBSerializer
-
+from preprocess_util import MyLMDBSerializer, get_world_size
 import sys
-
-from util import index_df_column, open_tsv
 
 csv.field_size_limit(sys.maxsize)
-
+sys.path.append('buatest/detectron2')
+sys.path.append('DeVLBert')
 import os
-import sys
+
 import cv2
 import numpy as np
-
-sys.path.append('buatest/detectron2')
+from util import index_df_column, open_tsv
+from torch.nn.parallel._functions import Scatter
+from torch.nn.parallel import DataParallel
+import torch
 
 from detectron2.checkpoint import DetectionCheckpointer
 from detectron2.config import get_cfg
@@ -38,18 +36,20 @@ from buatest.utils.extract_utils import get_image_blob, save_bbox, save_roi_feat
     prep_roi_features, filter_keep_boxes
 from models import add_config
 from models.bua.box_regression import BUABoxes
-from cfg import FGS
+from preprocess_cfg import FGS
 import ray
 from ray.actor import ActorHandle
 
 FIELDNAMES = ['image_id', 'image_w', 'image_h', 'num_boxes', 'boxes', 'features', 'cls_prob']
-os.environ['CUDA_VISIBLE_DEVICES'] = FGS.gpus
-import torch;
+#
+# torch._C._cuda_init()
+input_index_file = Path(FGS.lmdb_folder, f'{FGS.lmdb_file}_{FGS.local_rank}_{FGS.index_file}')
+torch.cuda.set_device(FGS.local_rank)
+import torch.distributed as dist
 
-torch._C._cuda_init()
-input_index_file = Path(FGS.lmdb_folder, f'{FGS.lmdb_file}_{FGS.index_file}')
-
-
+os.environ['MASTER_ADDR'] = '127.0.0.1'
+os.environ['MASTER_PORT'] = '29500'
+dist.init_process_group('nccl', rank=FGS.local_rank, world_size=torch.cuda.device_count())
 # --mode
 # caffe
 # --num-cpus
@@ -195,82 +195,6 @@ def extract_feat(split_idx, img_list, cfg, args, actor: ActorHandle):
         actor.update.remote(1)
 
 
-# Nathan: for easy debugging
-def extract_feat_no_ray(split_idx, img_list, cfg, args):
-    num_images = len(img_list)
-    print('Number of images on split{}: {}.'.format(split_idx, num_images))
-
-    model = DefaultTrainer.build_model(cfg)
-    DetectionCheckpointer(model, save_dir=cfg.OUTPUT_DIR).resume_or_load(
-        Path(BUA_ROOT_DIR, cfg.MODEL.WEIGHTS).as_posix(), resume=args.resume
-    )
-    model.eval()
-
-    for img_file in (img_list):
-        # if os.path.exists(os.path.join(args.output_dir, img_file.split('.')[0]+'.npz')):
-        #     continue
-        im = cv2.imread(os.path.join(args.image_dir, img_file))
-        if im is None:
-            print(os.path.join(args.image_dir, img_file), "is illegal!")
-            continue
-        return image_to_intermediate(cfg, im, img_file, model)
-        # generate_npz(1,
-        #     args, cfg, img_file, im, dataset_dict,
-        #     boxes, scores, features_pooled, attr_scores)
-        # # extract bbox only
-        # elif cfg.MODEL.BUA.EXTRACTOR.MODE == 2:
-        #     with torch.set_grad_enabled(False):
-        #         boxes, scores = model([dataset_dict])
-        #     boxes = [box.cpu() for box in boxes]
-        #     scores = [score.cpu() for score in scores]
-        #     generate_npz(2,
-        #         args, cfg, img_file, im, dataset_dict,
-        #         boxes, scores)
-        # # extract roi features by bbox
-        # elif cfg.MODEL.BUA.EXTRACTOR.MODE == 3:
-        #     if not os.path.exists(os.path.join(args.bbox_dir, img_file.split('.')[0]+'.npz')):
-        #         continue
-        #     bbox = torch.from_numpy(np.load(os.path.join(args.bbox_dir, img_file.split('.')[0]+'.npz'))['bbox']) * dataset_dict['img_scale']
-        #     proposals = Instances(dataset_dict['image'].shape[-2:])
-        #     proposals.proposal_boxes = BUABoxes(bbox)
-        #     dataset_dict['proposals'] = proposals
-        #
-        #     attr_scores = None
-        #     with torch.set_grad_enabled(False):
-        #         if cfg.MODEL.BUA.ATTRIBUTE_ON:
-        #             boxes, scores, features_pooled, attr_scores = model([dataset_dict])
-        #         else:
-        #             boxes, scores, features_pooled = model([dataset_dict])
-        #     boxes = [box.tensor.cpu() for box in boxes]
-        #     scores = [score.cpu() for score in scores]
-        #     features_pooled = [feat.cpu() for feat in features_pooled]
-        #     if not attr_scores is None:
-        #         attr_scores = [attr_score.data.cpu() for attr_score in attr_scores]
-        #     generate_npz(3,
-        #         args, cfg, img_file, im, dataset_dict,
-        #         boxes, scores, features_pooled, attr_scores)
-
-
-def image_to_intermediate(cfg, im, img_file, model):
-    dataset_dict = get_image_blob(im, cfg.MODEL.PIXEL_MEAN)
-    # extract roi features
-    # if cfg.MODEL.BUA.EXTRACTOR.MODE == 1:
-    attr_scores = None
-    with torch.set_grad_enabled(False):
-        if cfg.MODEL.BUA.ATTRIBUTE_ON:
-            boxes, scores, features_pooled, attr_scores = model([dataset_dict])
-        else:
-            boxes, scores, features_pooled = model([dataset_dict])
-    boxes = [box.tensor.cpu() for box in boxes]
-    scores = [score.cpu() for score in scores]
-    features_pooled = [feat.cpu() for feat in features_pooled]
-    if not attr_scores is None:
-        attr_scores = [attr_score.cpu() for attr_score in attr_scores]
-    image_bboxes, image_feat, info, keep_boxes = prep_roi_features(attr_scores, boxes, cfg, dataset_dict,
-                                                                   features_pooled, im, img_file, scores)
-    return image_bboxes, image_feat, info, keep_boxes
-
-
 class CoCaInputDataflow(DataFlow):
     def __init__(self, image_dir, max_nb_images=-1):
 
@@ -278,13 +202,23 @@ class CoCaInputDataflow(DataFlow):
         self.image_ids = []
         print("Gathering image paths ...")
         s = time()
-        for i, f in enumerate(os.scandir(image_dir)):
-            if (max_nb_images > 0) and (i >= max_nb_images):
-                break
-            self.image_ids.append(f.name)
+        cached_id_path = Path('blobs',f'image_ids_{FGS.max_nb_images}.p' if FGS.max_nb_images > 0 else 'image_ids_full.p')
+        if Path.exists(cached_id_path):
+            with open(cached_id_path,'rb') as f:
+                self.image_ids = pickle.load(f)
+        else:
+            for i, f in enumerate(os.scandir(image_dir)):
+                if (max_nb_images > 0) and (i >= max_nb_images):
+                    break
+                self.image_ids.append(f.name)
+            with open(cached_id_path,'wb') as f:
+                pickle.dump(self.image_ids, f)
+        self.image_ids = self.image_ids[FGS.local_rank::get_world_size()]
         print(f"Done gathering image paths after {time() - s} seconds")
         self.num_files = len(self.image_ids)
         print('Number of images: {}.'.format(self.num_files))
+        print(FGS.local_rank,get_world_size())
+
 
         # region Storing / loading captions
         caption_file = 'caption_train.json'
@@ -324,14 +258,14 @@ class CoCaInputDataflow(DataFlow):
 
     def __iter__(self):
         for image_id in self.image_ids[self.total_count():]:
-            im = cv2.imread(os.path.join(self.image_dir, image_id))
+            im = cv2.imread(os.path.join(self.image_dir, image_id)) #TODO maybe parallelize this with CPUs to not make it a bottleneck?
 
             if self.clean_count % CHECKPOINT_FREQUENCY == 0:
                 pickle.dump((self.clean_count, self.dirty_count),
                             open(input_index_file, 'wb'))
 
             if im is None:
-                print(os.path.join(self.image_dir, image_id), "is illegal!")
+                # print(os.path.join(self.image_dir, image_id), "is illegal!")
                 self.dirty_count += 1
                 continue
             self.clean_count += 1
@@ -345,90 +279,6 @@ class CoCaInputDataflow(DataFlow):
     def __len__(self):
         return self.num_files
 
-
-from torch.nn.parallel._functions import Scatter
-from torch.nn.parallel import DataParallel
-import torch
-
-
-# This code was copied from torch.nn.parallel and adapted for DataParallel to chunk lists instead of duplicating them
-# (this is really all this code is here for)
-# from https://discuss.pytorch.org/t/dataparallel-chunking-for-a-list-of-3d-tensors/15962/7
-class DataParallelV2(DataParallel):
-
-    def scatter_kwargs(self, inputs, kwargs, target_gpus, dim=0):
-        r"""Scatter with support for kwargs dictionary"""
-        inputs = self.scatter_wrapper(inputs, target_gpus, dim) if inputs else []
-        kwargs = self.scatter_wrapper(kwargs, target_gpus, dim) if kwargs else []
-        if len(inputs) < len(kwargs):
-            inputs.extend([() for _ in range(len(kwargs) - len(inputs))])
-        elif len(kwargs) < len(inputs):
-            kwargs.extend([{} for _ in range(len(inputs) - len(kwargs))])
-        inputs = tuple(inputs)
-        kwargs = tuple(kwargs)
-        return inputs, kwargs
-
-    def scatter_wrapper(self, inputs, target_gpus, dim=0):
-        r"""
-        Slices tensors into approximately equal chunks and
-        distributes them across given GPUs. Duplicates
-        references to objects that are not tensors.
-        """
-
-        def scatter_map(obj):
-            if isinstance(obj, torch.Tensor):
-                return Scatter.apply(target_gpus, None, dim, obj)
-            if isinstance(obj, tuple) and len(obj) > 0:
-                return list(zip(*map(scatter_map, obj)))
-            if isinstance(obj, list) and len(obj) > 0:
-                size = len(obj) // len(target_gpus)
-                return [obj[i * size:(i + 1) * size] for i in range(len(target_gpus))]
-            if isinstance(obj, dict) and len(obj) > 0:
-                return list(map(type(obj), zip(*map(scatter_map, obj.items()))))
-            return [obj for targets in target_gpus]
-
-        # After scatter_map is called, a scatter_map cell will exist. This cell
-        # has a reference to the actual function scatter_map, which has references
-        # to a closure that has a reference to the scatter_map cell (because the
-        # fn is recursive). To avoid this reference cycle, we set the function to
-        # None, clearing the cell
-        try:
-            return scatter_map(inputs)
-        finally:
-            scatter_map = None
-
-    def scatter(self, inputs, kwargs, device_ids):
-        return self.scatter_kwargs(inputs, kwargs, device_ids, dim=self.dim)
-
-    def gather(self, outputs, output_device):
-        # def gather_map(outputs):
-        #     out = outputs[0]
-        #     # if isinstance(out,BUABoxes):
-        #     #     return BUABoxes(Gather.apply(output_device, self.dim, *[o.tensor for o in outputs])) #TODO split this up per image
-        #     if isinstance(out, torch.Tensor) or isinstance(out,BUABoxes):
-        #         # return Gather.apply(output_device, self.dim, *outputs)
-        #         return type(outputs)([o.to(output_device) for o in outputs])
-        #     if out is None:
-        #         return None
-        #     if isinstance(out, dict):
-        #         if not all((len(out) == len(d) for d in outputs)):
-        #             raise ValueError('All dicts must have the same number of keys')
-        #         return type(out)(((k, gather_map([d[k] for d in outputs]))
-        #                           for k in out))
-        #     return type(out)(map(gather_map, zip(*outputs)))
-        #
-        # # Recursive function calls like this create reference cycles.
-        # # Setting the function to None clears the refcycle.
-        # try:
-        #     res = gather_map(outputs)
-        # finally:
-        #     gather_map = None
-        # return res
-        res = [tuple([box_or_tensor.to(output_device) for box_or_tensor in single_image_result]) for o in outputs for
-               single_image_result in list(zip(*o))]
-        return res
-
-
 class CoCaDataFlow(RNGDataFlow):
     """
     """
@@ -439,24 +289,13 @@ class CoCaDataFlow(RNGDataFlow):
         self.non_batched_img_to_input_df = CoCaInputDataflow(FGS.image_dir, FGS.max_nb_images)
         self.img_to_input_df = BatchData(self.non_batched_img_to_input_df, FGS.batch_size,
                                          use_list=True)
-        # print("Gathering image paths ...")
-        # self.image_dir = args.image_dir
-        # self.image_files = list(os.scandir(image_dir))
-        # self.image_names = []
-        # for i,f in enumerate(os.scandir(args.image_dir)):
-        #     if (args.num_samples > 0) and (i >= args.num_samples):
-        #         break
-        #     self.image_names.append(f.name)
-        # self.num_caps = len(self.image_names)  # TODO: compute the number of PROCESSED pics
-        # print('Number of images: {}.'.format(self.num_caps))
-        # print("Done gathering image paths")
 
         self.model = DefaultTrainer.build_model(cfg)
         DetectionCheckpointer(self.model, save_dir=self.cfg.OUTPUT_DIR).resume_or_load(
             Path(BUA_ROOT_DIR, cfg.MODEL.WEIGHTS).as_posix(), resume=args.resume
         )
         self.model.eval()
-        self.model = DataParallelV2(self.model)
+        # self.model = DataParallelV2(self.model)
 
     def __len__(self):
         return len(self.non_batched_img_to_input_df)
@@ -470,7 +309,7 @@ class CoCaDataFlow(RNGDataFlow):
                 model_outputs = list(self.model(rcnn_input))  # boxes, scores, features_pooled
             for i, o in enumerate(model_outputs):
                 model_outputs[i] = [e.to('cpu') for e in o]
-            boxes, scores, feats = zip(*model_outputs)
+            boxes, scores, feats = model_outputs
 
             keep_idxs = []
             keep_feats = []
@@ -508,10 +347,11 @@ def main():
     cfg = setup(args)
     print(f"Setup done after {time() - start}")
 
-    ds = CoCaDataFlow(cfg, args)
+    ds = CoCaDataFlow(cfg, args)  # TODO fix RuntimeError: No CUDA GPUs are available
 
     print(f"Conceptual_Caption init done after {time() - start}")
-    MyLMDBSerializer.save(ds, str(Path(FGS.lmdb_folder, f'{FGS.lmdb_file}.lmdb')),
+    lmdb_path = str(Path(FGS.lmdb_folder, f'{FGS.lmdb_file}_{FGS.local_rank}.lmdb'))
+    MyLMDBSerializer.save(ds, lmdb_path,
                           write_frequency=CHECKPOINT_FREQUENCY)
     print(f"Done after {time() - start}")
 

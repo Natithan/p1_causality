@@ -17,7 +17,7 @@ from detectron2.layers import (
 
 from .backbone import Backbone
 from .build import BACKBONE_REGISTRY
-from cfg import FGS
+from preprocess_cfg import FGS
 __all__ = [
     "ResNetBlockBase",
     "BasicBlock",

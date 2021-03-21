@@ -1,0 +1,2 @@
+python -m torch.distributed.launch --nproc_per_node=4 --nnodes=1 --node_rank=0 /cw/liir/NoCsBack/testliir/nathan/p1_causality/preprocess.py \
+--mode caffe --num_cpus 32 --extract_mode roi_feats --config_file buatest/configs/bua-caffe/extract-bua-caffe-r101-fix36.yaml --image_dir /cw/liir/NoCsBack/testliir/datasets/ConceptualCaptions/training --lmdb_folder /export/home2/NoCsBack/working/nathan/features_CoCa_lmdb/ --batch_size 12 --lmdb_file full_coca_36

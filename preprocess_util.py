@@ -51,6 +51,7 @@
 # File: serialize.py
 import pickle
 
+import torch.distributed as dist
 import lmdb
 import numpy as np
 import os
@@ -68,7 +69,7 @@ from tensorpack.dataflow.raw import DataFromGenerator, DataFromList
 
 __all__ = ['MyLMDBSerializer']
 
-from cfg import FGS
+from preprocess_cfg import FGS
 from constants import CHECKPOINT_FREQUENCY
 
 
@@ -162,7 +163,34 @@ class MyLMDBSerializer:
 
         txn = db.begin(write=True)
         previous_idx = txn.stat()['entries']
-        with get_tqdm(total=size,initial=df.non_batched_img_to_input_df.clean_count) as pbar:
+        if FGS.local_rank == 0:
+            with get_tqdm(total=size,initial=df.non_batched_img_to_input_df.clean_count) as pbar:
+                idx = 0
+                real_idx = previous_idx + idx
+                # LMDB transaction is not exception-safe!
+                # although it has a context manager interface
+                for idx, dp in enumerate(df):
+                    real_idx = previous_idx + idx
+                    # if real_idx % CHECKPOINT_FREQUENCY == 0:
+                    #     idxs[path] = real_idx
+                    #     pickle.dump(idxs, open(FGS.lmdb_index_file,'wb'))
+                    # txn = put_or_grow(txn, u'{:08}'.format(idx).encode('ascii'), dumps(dp))
+                    txn = put_or_grow(txn, enc(real_idx), dumps(dp))
+                    pbar.update()
+                    # if (real_idx + 1) % write_frequency == 0:
+                    if real_idx % write_frequency == 0:
+                        txn.commit()
+                        txn = db.begin(write=True)
+                txn.commit()
+
+                # keys = [u'{:08}'.format(k).encode('ascii') for k in range(idx + 1)]
+                keys = [enc(k) for k in range(real_idx)]
+                with db.begin(write=True) as txn:
+                    txn = put_or_grow(txn, b'__keys__', dumps(keys))
+
+                logger.info("Flushing database ...")
+                db.sync()
+        else:
             idx = 0
             real_idx = previous_idx + idx
             # LMDB transaction is not exception-safe!
@@ -174,7 +202,6 @@ class MyLMDBSerializer:
                 #     pickle.dump(idxs, open(FGS.lmdb_index_file,'wb'))
                 # txn = put_or_grow(txn, u'{:08}'.format(idx).encode('ascii'), dumps(dp))
                 txn = put_or_grow(txn, enc(real_idx), dumps(dp))
-                pbar.update()
                 # if (real_idx + 1) % write_frequency == 0:
                 if real_idx % write_frequency == 0:
                     txn.commit()
@@ -207,16 +234,9 @@ class MyLMDBSerializer:
         return loads(dp[1])
 
 
-if __name__ == '__main__':
-    from tensorpack.dataflow.raw import FakeData
-    import time
-    ds = FakeData([[300, 300, 3], [1]], 1000)
-
-    LMDBSerializer.save(ds, 'out.lmdb')
-    print(time.time())
-    df = LMDBSerializer.load('out.lmdb')
-    df.reset_state()
-    for idx, dp in enumerate(df):
-        pass
-    print("LMDB Finished, ", idx)
-    print(time.time())
+def get_world_size() -> int:
+    if not dist.is_available():
+        return 1
+    if not dist.is_initialized():
+        return 1
+    return dist.get_world_size()

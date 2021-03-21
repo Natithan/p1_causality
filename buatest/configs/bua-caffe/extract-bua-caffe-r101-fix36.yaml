@@ -8,7 +8,7 @@ MODEL:
     NAME: "BUARPN"
     MIN_SIZE: 16
   BUA:
-    ATTRIBUTE_ON: True
+    ATTRIBUTE_ON: False #Nathan changed
     EXTRACT_FEATS: True
     RPN:
       CONV_OUT_CHANNELS: 512

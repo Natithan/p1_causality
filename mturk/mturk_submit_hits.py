@@ -14,9 +14,9 @@ from absl import flags
 
 from constants import URL_PATH, MTURK_DIR
 from easyturk import EasyTurk
-from util import index_df_column, open_tsv
+from util import index_df_column, open_tsv, TIME
 import pandas as pd
-from time import time
+
 ROOT_DIR = "/cw/liir/NoCsBack/testliir/nathan/p1_causality"
 # region Flags stuff
 FGS = flags.FLAGS
@@ -29,7 +29,7 @@ flags.DEFINE_integer("test_percentage", 80, "")
 flags.DEFINE_integer("min_percent_approved", 85, "")
 flags.DEFINE_integer("min_hits_approved", 50, "")
 FGS(sys.argv)
-TIME = round(time())
+
 
 # endregion
 def launch_causal_annotation(data, reward=1.00, tasks_per_hit=10, sandbox=False):

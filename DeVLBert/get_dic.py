@@ -21,13 +21,17 @@ from tensorboardX import SummaryWriter
 from pytorch_pretrained_bert.tokenization import BertTokenizer
 from pytorch_pretrained_bert.optimization import BertAdam, WarmupLinearSchedule
 import warnings
+
 warnings.simplefilter(action='ignore', category=FutureWarning)
 from devlbert.datasets.concept_cap_dataset2 import ConceptCapLoaderTrain
 from devlbert.devlbert2 import BertForMultiModalPreTraining, BertConfig
 import torch.distributed as dist
-
+from constants import ID2CLASS_PATH
 import pdb
 
+# os.environ['NCCL_DEBUG'] = "INFO"
+os.environ['MASTER_ADDR'] = "127.0.0.1"
+os.environ['MASTER_PORT'] = "6006"
 logging.basicConfig(
     format="%(asctime)s - %(levelname)s - %(name)s -   %(message)s",
     datefmt="%m/%d/%Y %H:%M:%S",
@@ -37,7 +41,7 @@ logger = logging.getLogger(__name__)
 
 
 def main():
-    #region Parser stuff
+    # region Parser stuff
     parser = argparse.ArgumentParser()
 
     # Required parameters
@@ -60,14 +64,14 @@ def main():
         default="",
         type=str,
         help="Bert pre-trained model selected in the list: bert-base-uncased, "
-        "bert-large-uncased, bert-base-cased, bert-base-multilingual, bert-base-chinese.",
+             "bert-large-uncased, bert-base-cased, bert-base-multilingual, bert-base-chinese.",
     )
     parser.add_argument(
         "--bert_model",
         default="bert-base-uncased",
         type=str,
         help="Bert pre-trained model selected in the list: bert-base-uncased, "
-        "bert-large-uncased, bert-base-cased, bert-base-multilingual, bert-base-chinese.",
+             "bert-large-uncased, bert-base-cased, bert-base-multilingual, bert-base-chinese.",
     )
     parser.add_argument(
         "--output_dir",
@@ -90,8 +94,8 @@ def main():
         default=36,
         type=int,
         help="The maximum total input sequence length after WordPiece tokenization. \n"
-        "Sequences longer than this will be truncated, and sequences shorter \n"
-        "than this will be padded.",
+             "Sequences longer than this will be truncated, and sequences shorter \n"
+             "than this will be padded.",
     )
     parser.add_argument("--predict_feature", action="store_true", help="visual target.")
 
@@ -124,7 +128,7 @@ def main():
         default=0.1,
         type=float,
         help="Proportion of training to perform linear learning rate warmup for. "
-        "E.g., 0.1 = 10%% of training.",
+             "E.g., 0.1 = 10%% of training.",
     )
     parser.add_argument(
         "--img_weight", default=1, type=float, help="weight for image loss"
@@ -168,8 +172,8 @@ def main():
         type=float,
         default=0,
         help="Loss scaling to improve fp16 numeric stability. Only used when fp16 set to True.\n"
-        "0 (default value): dynamic loss scaling.\n"
-        "Positive power of 2: static loss scaling value.\n",
+             "0 (default value): dynamic loss scaling.\n"
+             "Positive power of 2: static loss scaling value.\n",
     )
     parser.add_argument(
         "--num_workers",
@@ -188,25 +192,31 @@ def main():
         "--baseline", action="store_true", help="Wheter to use the baseline model (single bert)."
     )
     parser.add_argument(
-        "--freeze", default = -1, type=int,
+        "--freeze", default=-1, type=int,
         help="till which layer of textual stream of vilbert need to fixed."
     )
     parser.add_argument(
         "--use_chuncks", default=0, type=float, help="whether use chunck for parallel training."
     )
     parser.add_argument(
-        "--distributed", action="store_true" , help="whether use chunck for parallel training."
+        "--distributed", action="store_true", help="whether use chunck for parallel training."
     )
     parser.add_argument(
-        "--without_coattention", action="store_true" , help="whether pair loss."
+        "--without_coattention", action="store_true", help="whether pair loss."
     )
     parser.add_argument(
         "--continue_training",
         action="store_true",
         help="if we need to continue a stopped pretraining procedure, add this"
     )
+    parser.add_argument(
+        "--gpus", default=[0,1,2,3],
+        nargs='+', type=int,
+        help="which gpus to consider"
+    )
     args = parser.parse_args()
-    #endregion
+    os.environ['CUDA_VISIBLE_DEVICES'] = ",".join([str(g) for g in args.gpus])
+    # endregion
     print(args)
     if args.save_name is not '':
         timeStamp = args.save_name
@@ -316,6 +326,7 @@ def main():
     default_gpu = False
     if dist.is_available() and args.distributed:
         rank = dist.get_rank()
+        print("rank",dist.get_rank())
         if rank == 0:
             default_gpu = True
     else:
@@ -331,7 +342,8 @@ def main():
 
     if args.from_pretrained:
         if args.continue_training:
-            ckpt_load_path = os.path.join(args.from_pretrained, "pytorch_model_{}.bin".format(int(args.start_epoch) - 1))
+            ckpt_load_path = os.path.join(args.from_pretrained,
+                                          "pytorch_model_{}.bin".format(int(args.start_epoch) - 1))
             model = BertForMultiModalPreTraining.from_pretrained(ckpt_load_path, config)
         else:
             model = BertForMultiModalPreTraining.from_pretrained(args.from_pretrained, config)
@@ -459,14 +471,18 @@ def main():
 
     model.eval()
     torch.set_grad_enabled(False)
-    id2class = np.load("./dic/id2class1155.npy", allow_pickle=True).item()
+    id2class = np.load(ID2CLASS_PATH, allow_pickle=True).item()
     noun_size = len(id2class)
     print("Noun vocabulary size is {}".format(noun_size))
     prior_t = torch.zeros((noun_size), dtype=torch.float64).cuda()
     dic_t = torch.zeros((noun_size, 768), dtype=torch.float64).cuda()
     prior_v = torch.zeros((1601), dtype=torch.float64).cuda()
     dic_v = torch.zeros((1601, 2048), dtype=torch.float64).cuda()
-    for step, batch in enumerate(train_dataset, 1):
+    if default_gpu:
+        iterator = tqdm(enumerate(train_dataset, 1), total=len(train_dataset))
+    else:
+        iterator = enumerate(train_dataset, 1)
+    for step, batch in iterator:
         batch = tuple(t.cuda(device=device, non_blocking=True) for t in batch)
 
         input_ids, image_feat, image_loc, segment_ids, input_mask, image_mask, image_target, num_boxes = batch
@@ -484,7 +500,7 @@ def main():
             for j in range(l):
                 id = int(input_ids[i][j])
                 cls = id2class.get(id)
-                if cls is not None and (j != l-1 and int(input_ids[i][j+1]) not in special_ids or j == l-1):
+                if cls is not None and (j != l - 1 and int(input_ids[i][j + 1]) not in special_ids or j == l - 1):
                     prior_t[cls] += 1
                     dic_t[cls] += embedding_output[i][j].to(torch.float64)
 
@@ -495,17 +511,23 @@ def main():
                 prior_v[index] += 1
                 dic_v[index] += image_feat[i][j].to(torch.float64)
 
-        if default_gpu and step % 20 == 0:
-            print(step)
 
-    np.save("./dic/prior_t", prior_t.cpu().numpy())
-    np.save("./dic/dic_t", dic_t.cpu().numpy())
-    np.save("./dic/prior_v", prior_v.cpu().numpy())
-    np.save("./dic/dic_v", dic_v.cpu().numpy())
-    # np.save("./dic/prior_t_{}".format(dist.get_rank()), prior_t.cpu().numpy())
-    # np.save("./dic/dic_t_{}".format(dist.get_rank()), dic_t.cpu().numpy())
-    # np.save("./dic/prior_v_{}".format(dist.get_rank()), prior_v.cpu().numpy())
-    # np.save("./dic/dic_v_{}".format(dist.get_rank()), dic_v.cpu().numpy())
+
+    # np.save("./dic/prior_t", prior_t.cpu().numpy())
+    # np.save("./dic/dic_t", dic_t.cpu().numpy())
+    # np.save("./dic/prior_v", prior_v.cpu().numpy())
+    # np.save("./dic/dic_v", dic_v.cpu().numpy())
+    if args.distributed:
+        np.save("./dic/prior_t_{}".format(dist.get_rank()), prior_t.cpu().numpy())
+        np.save("./dic/dic_t_{}".format(dist.get_rank()), dic_t.cpu().numpy())
+        np.save("./dic/prior_v_{}".format(dist.get_rank()), prior_v.cpu().numpy())
+        np.save("./dic/dic_v_{}".format(dist.get_rank()), dic_v.cpu().numpy())
+    else:
+        np.save("./dic/prior_t", prior_t.cpu().numpy())
+        np.save("./dic/dic_t", dic_t.cpu().numpy())
+        np.save("./dic/prior_v", prior_v.cpu().numpy())
+        np.save("./dic/dic_v", dic_v.cpu().numpy())
+
 
 if __name__ == "__main__":
     main()

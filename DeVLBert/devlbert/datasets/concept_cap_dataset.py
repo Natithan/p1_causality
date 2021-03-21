@@ -15,8 +15,8 @@ from torch.utils.data.sampler import Sampler
 import torch.distributed as dist
 import sys
 import pdb
-REGION_LEN = 84
-# REGION_LEN = 36 NATHAN
+from constants import ID2CLASS_PATH
+REGION_LEN = 36
 logging.basicConfig(
     format="%(asctime)s - %(levelname)s - %(name)s -   %(message)s",
     datefmt="%m/%d/%Y %H:%M:%S",
@@ -172,7 +172,7 @@ class ConceptCapLoaderTrain(object):
             image_loc, image_target, image_label, image_mask, image_id, causal_label_t, causal_label_v = batch
 
             batch_size = input_ids.shape[0]
-            g_image_feat = np.sum(image_feat, axis=1) / np.sum(image_mask, axis=1, keepdims=True)
+            g_image_feat = np.sum(image_feat, axis=1) / np.sum(image_mask, axis=1, keepdims=True) # Average (g for global?) feat over all bboxes
             # print(np.sum(image_feat, axis=1).shape, np.sum(image_mask, axis=1, keepdims=True).shape) #(64, 2048) (64, 1)
             image_feat = np.concatenate([np.expand_dims(g_image_feat, axis=1), image_feat], axis=1)
             image_feat = np.array(image_feat, dtype=np.float32)
@@ -308,7 +308,7 @@ class BertPreprocessBatch(object):
             predict_feature=False,
             visualization=False
     ):
-        self.noun = np.load("./dic/id2class1155.npy", allow_pickle=True).item()
+        self.noun = np.load(ID2CLASS_PATH, allow_pickle=True).item()
         self.vocabulary_list = list(tokenizer.vocab.items())
         self.split = split
         self.seq_len = seq_len
@@ -328,10 +328,17 @@ class BertPreprocessBatch(object):
         image_target = np.zeros((self.region_len, 1601), dtype=np.float32)
         image_location = np.zeros((self.region_len, 5), dtype=np.float32)
 
-        num_boxes = int(num_boxes)
-        image_feature[:num_boxes] = image_feature_wp
-        image_target[:num_boxes] = image_target_wp
-        image_location[:num_boxes, :4] = image_location_wp
+        # Nathan: I created RPN features with MIN_BOXES=10/MAX_BOXES=100, they did MIN=MAX=36.
+        # For now, cropping regions to [:36] if longer, and later making sure to ignore indices > num_boxes if shorter
+        # num_boxes = int(num_boxes)
+        num_boxes = min(int(num_boxes),REGION_LEN)
+        image_feature[:num_boxes] = image_feature_wp[:num_boxes]
+        image_target[:num_boxes] = image_target_wp[:num_boxes]
+        image_location[:num_boxes,:4] = image_location_wp[:num_boxes]
+        # num_boxes = int(num_boxes)
+        # image_feature[:num_boxes] = image_feature_wp
+        # image_target[:num_boxes] = image_target_wp
+        # image_location[:num_boxes, :4] = image_location_wp
 
         image_location[:, 4] = (image_location[:, 3] - image_location[:, 1]) * (
                     image_location[:, 2] - image_location[:, 0]) / (float(image_w) * float(image_h))

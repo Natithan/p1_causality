@@ -1518,7 +1518,7 @@ class Causal_t(nn.Module):
             attention = torch.mm(self.Wy(sentence), self.Wz(self.dic_z).t()) / (self.embedding_size ** 0.5)
             attention = F.softmax(attention, 1)  # torch.Size([box, 1601])
             z_hat = attention.unsqueeze(2) * self.dic_z.unsqueeze(0)  # torch.Size([box, 1601, 2048])
-            z = torch.matmul(self.prior.unsqueeze(0), z_hat).squeeze(1)  # torch.Size([box, 1, 2048])->torch.Size([box, 2048])
+            z = torch.matmul(self.prior.unsqueeze(0), z_hat).squeeze(1)  # torch.Size([box, 1, 2048])->torch.Size([box, 2048]) # TODO fix RuntimeError: mat1 dim 1 must match mat2 dim 0
             temp.append(z)
         temp = torch.stack(temp, 0)
         return temp

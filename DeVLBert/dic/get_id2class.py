@@ -4,6 +4,7 @@ from pytorch_pretrained_bert.tokenization import BertTokenizer
 import json
 import tensorpack.dataflow as td
 import collections
+from constants import LMDB_PATH
 
 tokenizer = BertTokenizer.from_pretrained(
     "bert-base-uncased", do_lower_case=True
@@ -22,7 +23,8 @@ new_dic = {}
 cur = 0
 # # 387991 is the number of samples in a dataset segment, 8 segments
 # limit = 387991 * 8 * 4
-limit = 166 * 4
+# nathan: I didn't split my data into segments
+limit = len(td.LMDBSerializer.load(LMDB_PATH, shuffle=False)) * 4
 for k, v in d.items():
     new_dic[k] = v
     cur += v
@@ -40,5 +42,5 @@ for i in range(len(noun_ids)):
     d[noun_ids[i]] = i
 
 print("Noun vocabulary size is {}".format(len(d)))
-np.save("./id2class1155.npy", d)
+np.save(f"./id2class{len(d)}.npy", d)
 

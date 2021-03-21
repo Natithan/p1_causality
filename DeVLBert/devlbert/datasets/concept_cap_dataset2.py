@@ -1,4 +1,6 @@
 import copy
+
+from constants import LMDB_PATH, CAPTION_PATH
 from pathlib import Path
 
 import json
@@ -16,9 +18,10 @@ from torch.utils.data.sampler import Sampler
 import torch.distributed as dist
 import sys
 import pdb
-ROOT_FOLDER = "/cw/liir/NoCsBack/testliir/nathan/p1_causality/
-REGION_LEN = 84
-# REGION_LEN = 36
+from util import MyLMDBSerializer
+ROOT_FOLDER = "/cw/liir/NoCsBack/testliir/nathan/p1_causality/"
+# REGION_LEN = 84
+REGION_LEN = 36
 logging.basicConfig(
     format="%(asctime)s - %(levelname)s - %(name)s -   %(message)s",
     datefmt="%m/%d/%Y %H:%M:%S",
@@ -123,23 +126,25 @@ class ConceptCapLoaderTrain(object):
             num_replicas = dist.get_world_size()
             # assert num_replicas == 8
             rank = dist.get_rank()
-            lmdb_file = "/mnt3/xuesheng/features_lmdb/CC/training_feat_part_" + str(rank) + ".lmdb"
+            lmdb_file = "/mnt3/xuesheng/features_lmdb/CC/training_feat_part_" + str(rank) + ".lmdb" #TODO split access to the database here
             # if not os.path.exists(lmdb_file):
             # lmdb_file = "/srv/share/datasets/conceptual_caption/training_feat_part_" + str(rank) + ".lmdb"
-        else:
+        # else:
             # lmdb_file = "/coc/dataset/conceptual_caption/training_feat_all.lmdb"
             # if not os.path.exists(lmdb_file):
-            lmdb_file = Path(ROOT_FOLDER,"DeVLBert/features_lmdb/CC/training_feat_all.lmdb").as_posix()
+            # lmdb_file = Path(ROOT_FOLDER,"DeVLBert/features_lmdb/CC/training_feat_all.lmdb").as_posix()
 
-        caption_path = Path(ROOT_FOLDER,"DeVLBert/features_lmdb/CC/caption_train.json").as_posix()
 
-        print("Loading from %s" % lmdb_file)
+        print("Loading from %s" % LMDB_PATH)
 
-        ds = td.LMDBSerializer.load(lmdb_file, shuffle=False)
+        if dist.is_available() and distributed:
+            ds = MyLMDBSerializer.load(LMDB_PATH, shuffle=False,rank=rank,nb_processes=dist.get_world_size())
+        else:
+            ds = td.LMDBSerializer.load(LMDB_PATH, shuffle=False)
         self.num_dataset = len(ds)
 
         preprocess_function = BertPreprocessBatch(
-            caption_path,
+            CAPTION_PATH,
             tokenizer,
             seq_len,
             REGION_LEN,
@@ -227,10 +232,13 @@ class BertPreprocessBatch(object):
         image_target = np.zeros((self.region_len, 1601), dtype=np.float32)
         image_location = np.zeros((self.region_len, 5), dtype=np.float32)
 
-        num_boxes = int(num_boxes)
-        image_feature[:num_boxes] = image_feature_wp
-        image_target[:num_boxes] = image_target_wp
-        image_location[:num_boxes,:4] = image_location_wp
+        # Nathan: I created RPN features with MIN_BOXES=10/MAX_BOXES=100, they did MIN=MAX=36.
+        # For now, cropping regions to [:36] if longer, and later making sure to ignore indices > num_boxes if shorter
+        # num_boxes = int(num_boxes)
+        num_boxes = min(int(num_boxes),REGION_LEN)
+        image_feature[:num_boxes] = image_feature_wp[:num_boxes]
+        image_target[:num_boxes] = image_target_wp[:num_boxes]
+        image_location[:num_boxes,:4] = image_location_wp[:num_boxes]
 
         image_location[:,4] = (image_location[:,3] - image_location[:,1]) * (image_location[:,2] - image_location[:,0]) / (float(image_w) * float(image_h))
         
@@ -578,9 +586,9 @@ class ConceptCapLoaderRetrieval(object):
         self.num_workers = num_workers
         self._entry = []
 
-        self.features_all = np.zeros((1000, 37, 2048), dtype=np.float32)
-        self.spatials_all = np.zeros((1000, 37, 5), dtype=np.float32)
-        self.image_mask_all = np.zeros((1000, 37), dtype=np.float32)
+        self.features_all = np.zeros((1000, REGION_LEN + 1, 2048), dtype=np.float32)
+        self.spatials_all = np.zeros((1000, REGION_LEN + 1, 5), dtype=np.float32)
+        self.image_mask_all = np.zeros((1000, REGION_LEN + 1), dtype=np.float32)
         self.image_ids = []
         # load first 1000 file here.
         for i, batch in enumerate(self.ds.get_data()):

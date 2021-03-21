@@ -39,7 +39,7 @@ from detectron2.utils.collect_env import collect_env_info
 from detectron2.utils.env import seed_all_rng
 from detectron2.utils.events import CommonMetricPrinter, JSONWriter, TensorboardXWriter
 from detectron2.utils.logger import setup_logger
-from cfg import FGS
+from preprocess_cfg import FGS
 from . import hooks
 from .train_loop import SimpleTrainer
 
@@ -122,7 +122,7 @@ def default_setup(cfg, args):
     setup_logger(output_dir, distributed_rank=rank, name="fvcore")
     logger = setup_logger(output_dir, distributed_rank=rank)
     # Nathan
-    if FGS.verbose:
+    if FGS.verbose and (FGS.local_rank == 0):
         logger.info("Rank of current process: {}. World size: {}".format(rank, comm.get_world_size()))
         logger.info("Environment info:\n" + collect_env_info())
 

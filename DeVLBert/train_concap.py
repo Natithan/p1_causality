@@ -1,4 +1,5 @@
 import warnings
+
 warnings.simplefilter(action='ignore', category=FutureWarning)
 import argparse
 import json
@@ -9,6 +10,9 @@ from io import open
 import math
 import sys
 from time import strftime
+from time import time
+from datetime import datetime
+START = time()
 from timeit import default_timer as timer
 import numpy as np
 from tqdm import tqdm, trange
@@ -23,6 +27,7 @@ from devlbert.devlbert import BertForMultiModalPreTraining, BertConfig
 import torch.distributed as dist
 import pdb
 from time import gmtime
+from constants import MODEL_CKPT_DIR
 logging.basicConfig(
     format="%(asctime)s - %(levelname)s - %(name)s -   %(message)s",
     datefmt="%m/%d/%Y %H:%M:%S",
@@ -32,7 +37,7 @@ logger = logging.getLogger(__name__)
 
 
 def main():
-    #region Parser stuff
+    # region Parser stuff
     parser = argparse.ArgumentParser()
 
     # Required parameters
@@ -57,18 +62,18 @@ def main():
         default="",
         type=str,
         help="Bert pre-trained model selected in the list: bert-base-uncased, "
-        "bert-large-uncased, bert-base-cased, bert-base-multilingual, bert-base-chinese.",
+             "bert-large-uncased, bert-base-cased, bert-base-multilingual, bert-base-chinese.",
     )
     parser.add_argument(
         "--bert_model",
         default="bert-base-uncased",
         type=str,
         help="Bert pre-trained model selected in the list: bert-base-uncased, "
-        "bert-large-uncased, bert-base-cased, bert-base-multilingual, bert-base-chinese.",
+             "bert-large-uncased, bert-base-cased, bert-base-multilingual, bert-base-chinese.",
     )
     parser.add_argument(
         "--output_dir",
-        default="save",
+        default=MODEL_CKPT_DIR,
         type=str,
         # required=True,
         help="The output directory where the model checkpoints will be written.",
@@ -86,8 +91,8 @@ def main():
         default=36,
         type=int,
         help="The maximum total input sequence length after WordPiece tokenization. \n"
-        "Sequences longer than this will be truncated, and sequences shorter \n"
-        "than this will be padded.",
+             "Sequences longer than this will be truncated, and sequences shorter \n"
+             "than this will be padded.",
     )
     parser.add_argument("--predict_feature", action="store_true", help="visual target.")
 
@@ -120,7 +125,7 @@ def main():
         default=0.1,
         type=float,
         help="Proportion of training to perform linear learning rate warmup for. "
-        "E.g., 0.1 = 10%% of training.",
+             "E.g., 0.1 = 10%% of training.",
     )
     parser.add_argument(
         "--img_weight", default=1, type=float, help="weight for image loss"
@@ -164,8 +169,8 @@ def main():
         type=float,
         default=0,
         help="Loss scaling to improve fp16 numeric stability. Only used when fp16 set to True.\n"
-        "0 (default value): dynamic loss scaling.\n"
-        "Positive power of 2: static loss scaling value.\n",
+             "0 (default value): dynamic loss scaling.\n"
+             "Positive power of 2: static loss scaling value.\n",
     )
     parser.add_argument(
         "--num_workers",
@@ -184,36 +189,45 @@ def main():
         "--baseline", action="store_true", help="Wheter to use the baseline model (single bert)."
     )
     parser.add_argument(
-        "--freeze", default = -1, type=int,
+        "--freeze", default=-1, type=int,
         help="till which layer of textual stream of vilbert need to fixed."
     )
     parser.add_argument(
         "--use_chuncks", default=0, type=float, help="whether use chunck for parallel training."
     )
     parser.add_argument(
-        "--distributed", action="store_true" , help="whether use chunck for parallel training."
+        "--distributed", action="store_true", help="whether use chunck for parallel training."
     )
     parser.add_argument(
-        "--without_coattention", action="store_true" , help="whether pair loss."
+        "--without_coattention", action="store_true", help="whether pair loss."
     )
     parser.add_argument(
         "--continue_training",
         action="store_true",
         help="if we need to continue a stopped pretraining procedure, add this"
     )
+    parser.add_argument(
+        "--gpus",
+        nargs='+', type=int,
+        help="which gpus to consider"
+    )
+    parser.add_argument(
+        "--mini", action="store_true", help="Whether to train on mini data, just to test the whole training loop"
+    )
     args = parser.parse_args()
-    #endregion
+    os.environ['CUDA_VISIBLE_DEVICES'] = ",".join([str(g) for g in args.gpus])
+    # endregion
     if args.baseline:
         from pytorch_pretrained_bert.modeling import BertConfig
         from devlbert.basebert import BertForMultiModalPreTraining
     else:
         from devlbert.devlbert import BertForMultiModalPreTraining, BertConfig
 
-    print('\r\n'.join(f'{k}: {v}' for k,v in args.__dict__.items()))
+    print('\r\n'.join(f'{k}: {v}' for k, v in args.__dict__.items()))
     if args.save_name is not '':
         timeStamp = args.save_name
     else:
-        timeStamp = strftime("%d-%b-%y-%X-%a", gmtime())
+        timeStamp = strftime("%d-%b-%y-%X-%a")
         timeStamp += "_{:0>6d}".format(random.randint(0, 10e6))
 
     savePath = os.path.join(args.output_dir, timeStamp)
@@ -338,7 +352,8 @@ def main():
 
     if args.from_pretrained:
         if args.continue_training:
-            ckpt_load_path = os.path.join(args.from_pretrained, "pytorch_model_{}.bin".format(int(args.start_epoch) - 1))
+            ckpt_load_path = os.path.join(args.from_pretrained,
+                                          "pytorch_model_{}.bin".format(int(args.start_epoch) - 1))
             model = BertForMultiModalPreTraining.from_pretrained(ckpt_load_path, config)
         else:
             model = BertForMultiModalPreTraining.from_pretrained(args.from_pretrained, config)
@@ -358,7 +373,7 @@ def main():
             )
         model = DDP(model)
     # elif n_gpu > 1:
-        # model = torch.nn.DataParallel(model) Nathan skipping parallelization step for now
+    # model = torch.nn.DataParallel(model) Nathan skipping parallelization step for now
 
     no_decay = ["bias", "LayerNorm.bias", "LayerNorm.weight"]
 
@@ -402,7 +417,7 @@ def main():
         for key, value in dict(model.named_parameters()).items():
             if value.requires_grad:
                 # if key[12:] in bert_weight_name:
-                if key[5:] in bert_weight_name: # Nathan: starts with "bert.", guess the 12: was for an old version
+                if key[5:] in bert_weight_name:  # Nathan: starts with "bert.", guess the 12: was for an old version
                     lr = args.learning_rate * 0.1
                 else:
                     lr = args.learning_rate
@@ -472,16 +487,19 @@ def main():
         causal_prediction_loss_v_tmp, causal_prediction_loss_t_tmp, \
         causal_prediction_t2v_loss_tmp, causal_prediction_v2t_loss_tmp = 0, 0, 0, 0, 0, 0, 0, 0
         start_t = timer()
-        for step, batch in enumerate(train_dataset, 1):
+        iterator = tqdm(enumerate(train_dataset, 1), total=len(train_dataset)) if default_gpu else enumerate(train_dataset, 1)
+        for step, batch in iterator:
             batch = tuple(t.cuda(device=device, non_blocking=True) for t in batch)
-
-            input_ids, input_mask, segment_ids, lm_label_ids, is_next, image_feat, image_loc, image_target, image_label, image_mask,\
+            if args.mini:
+                if step > 2:
+                    break
+            input_ids, input_mask, segment_ids, lm_label_ids, is_next, image_feat, image_loc, image_target, image_label, image_mask, \
             image_ids, causal_label_t, causal_label_v = (
                 batch
             )
             masked_loss_t, masked_loss_v, next_sentence_loss, \
             causal_prediction_v_loss, causal_prediction_t_loss, \
-            causal_prediction_v2t_loss, causal_prediction_t2v_loss= model(
+            causal_prediction_v2t_loss, causal_prediction_t2v_loss = model(
                 input_ids,
                 image_feat,
                 image_loc,
@@ -516,7 +534,6 @@ def main():
             #     causal_prediction_t_loss = causal_prediction_t_loss.mean()
             #     causal_prediction_v2t_loss = causal_prediction_v2t_loss.mean()
             #     causal_prediction_t2v_loss = causal_prediction_t2v_loss.mean()
-
 
             # if args.gradient_accumulation_steps > 1:
             #     loss = loss / args.gradient_accumulation_steps
@@ -596,7 +613,6 @@ def main():
                 masked_loss_v_tmp, masked_loss_t_tmp, next_sentence_loss_tmp, loss_tmp, \
                 causal_prediction_loss_v_tmp, causal_prediction_loss_t_tmp, \
                 causal_prediction_t2v_loss_tmp, causal_prediction_v2t_loss_tmp = 0, 0, 0, 0, 0, 0, 0, 0
-
 
         # Do the evaluation
         # torch.set_grad_enabled(False)
@@ -684,13 +700,14 @@ def main():
                 model.module if hasattr(model, "module") else model
             )  # Only save the model it-self
             output_model_file = os.path.join(
-                savePath, "pytorch_model_" + str(epochId) + ".bin"
+                savePath, f"pytorch_model_{str(epochId)}.bin"
             )
             torch.save(model_to_save.state_dict(), output_model_file)
             # output_opt_state_dict_file = os.path.join(
             #     savePath, "optimizer_state_" + str(epochId) + ".bin"
             # )
             # torch.save(optimizer.state_dict(), output_opt_state_dict_file)
+
 
 class TBlogger:
     def __init__(self, log_dir, exp_name):
@@ -700,6 +717,7 @@ class TBlogger:
 
     def linePlot(self, step, val, split, key, xlabel="None"):
         self.logger.add_scalar(split + "/" + key, val, step)
+
 
 if __name__ == "__main__":
     main()

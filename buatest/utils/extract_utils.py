@@ -10,6 +10,7 @@ PIXEL_MEANS = np.array([[[102.9801, 115.9465, 122.7717]]])
 TEST_SCALES = (600,)
 TEST_MAX_SIZE = 1000
 
+
 def im_list_to_blob(ims):
     """Convert a list of images into a network input.
 
@@ -24,6 +25,7 @@ def im_list_to_blob(ims):
         blob[i, 0:im.shape[0], 0:im.shape[1], :] = im
 
     return blob
+
 
 def get_image_blob(im, pixel_means):
     """Converts an image into a network input.
@@ -62,7 +64,8 @@ def save_roi_features(args, cfg, im_file, im, dataset_dict, boxes, scores, featu
                                                                    features_pooled, im, im_file, scores)
 
     output_file = os.path.join(args.output_dir, im_file.split('.')[0])
-    np.savez_compressed(output_file, x=image_feat, bbox=image_bboxes, num_bbox=len(keep_boxes), image_h=np.size(im, 0), image_w=np.size(im, 1), info=info)
+    np.savez_compressed(output_file, x=image_feat, bbox=image_bboxes, num_bbox=len(keep_boxes), image_h=np.size(im, 0),
+                        image_w=np.size(im, 1), info=info)
 
 
 def prep_roi_features(attr_scores, boxes, cfg, dataset_dict, features_pooled, im, im_file, scores):
@@ -149,16 +152,16 @@ def filter_keep_boxes(dets, cfg, scores):  # Nathan
     #     keep_idxs = torch.argsort(max_conf, descending=True)[:MIN_BOXES]
     # elif len(keep_idxs) > MAX_BOXES:
     #     keep_idxs = torch.argsort(max_conf, descending=True)[:MAX_BOXES]
-    if len(fine_keep_idxs) < MIN_BOXES: # Nathan adapted to batched_nms use as well
+    if len(fine_keep_idxs) < MIN_BOXES:  # Nathan adapted to batched_nms use as well
         fine_keep_idxs = torch.index_select(input=rough_keep_idxs,
-                           dim=0,
-                           index=torch.argsort(rough_keep_scores, dim=-1, descending=True)
-                           )[:MIN_BOXES]
+                                            dim=0,
+                                            index=torch.argsort(rough_keep_scores, dim=-1, descending=True)
+                                            )[:MIN_BOXES]
     elif len(fine_keep_idxs) > MAX_BOXES:
         fine_keep_idxs = torch.index_select(input=rough_keep_idxs,
-                           dim=0,
-                           index=torch.argsort(rough_keep_scores, dim=-1, descending=True)
-                           )[:MAX_BOXES]
+                                            dim=0,
+                                            index=torch.argsort(rough_keep_scores, dim=-1, descending=True)
+                                            )[:MAX_BOXES]
 
     return fine_keep_idxs
 
@@ -172,8 +175,9 @@ def save_bbox(args, cfg, im_file, im, dataset_dict, boxes, scores):
     boxes = boxes[0]
     num_classes = scores.shape[1]
     boxes = BUABoxes(boxes.reshape(-1, 4))
-    boxes.clip((dataset_dict['image'].shape[1]/dataset_dict['im_scale'], dataset_dict['image'].shape[2]/dataset_dict['im_scale']))
-    boxes = boxes.tensor.view(-1, num_classes*4)  # R x C x 4
+    boxes.clip((dataset_dict['image'].shape[1] / dataset_dict['im_scale'],
+                dataset_dict['image'].shape[2] / dataset_dict['im_scale']))
+    boxes = boxes.tensor.view(-1, num_classes * 4)  # R x C x 4
 
     cls_boxes = torch.zeros((boxes.shape[0], 4))
     for idx in range(boxes.shape[0]):
@@ -182,17 +186,19 @@ def save_bbox(args, cfg, im_file, im, dataset_dict, boxes, scores):
 
     max_conf = torch.zeros((scores.shape[0])).to(scores.device)
     for cls_ind in range(1, num_classes):
-            cls_scores = scores[:, cls_ind]
-            keep = nms(cls_boxes, cls_scores, 0.3)
-            max_conf[keep] = torch.where(cls_scores[keep] > max_conf[keep],
-                                             cls_scores[keep],
-                                             max_conf[keep])
-            
+        cls_scores = scores[:, cls_ind]
+        keep = nms(cls_boxes, cls_scores, 0.3)
+        max_conf[keep] = torch.where(cls_scores[keep] > max_conf[keep],
+                                     cls_scores[keep],
+                                     max_conf[keep])
+
     keep_boxes = torch.argsort(max_conf, descending=True)[:MAX_BOXES]
     image_bboxes = cls_boxes[keep_boxes]
 
     output_file = os.path.join(args.output_dir, im_file.split('.')[0])
-    np.savez_compressed(output_file, bbox=image_bboxes, num_bbox=len(keep_boxes), image_h=np.size(im, 0), image_w=np.size(im, 1))
+    np.savez_compressed(output_file, bbox=image_bboxes, num_bbox=len(keep_boxes), image_h=np.size(im, 0),
+                        image_w=np.size(im, 1))
+
 
 def save_roi_features_by_bbox(args, cfg, im_file, im, dataset_dict, boxes, scores, features_pooled, attr_scores=None):
     MIN_BOXES = cfg.MODEL.BUA.EXTRACTOR.MIN_BOXES
@@ -205,12 +211,12 @@ def save_roi_features_by_bbox(args, cfg, im_file, im, dataset_dict, boxes, score
 
     image_feat = feats[keep_boxes]
     image_bboxes = dets[keep_boxes]
-    image_objects_conf = np.max(scores[keep_boxes].numpy()[:,1:], axis=1)
-    image_objects = np.argmax(scores[keep_boxes].numpy()[:,1:], axis=1)
+    image_objects_conf = np.max(scores[keep_boxes].numpy()[:, 1:], axis=1)
+    image_objects = np.argmax(scores[keep_boxes].numpy()[:, 1:], axis=1)
     if not attr_scores is None:
         attr_scores = attr_scores[0]
-        image_attrs_conf = np.max(attr_scores[keep_boxes].numpy()[:,1:], axis=1)
-        image_attrs = np.argmax(attr_scores[keep_boxes].numpy()[:,1:], axis=1)
+        image_attrs_conf = np.max(attr_scores[keep_boxes].numpy()[:, 1:], axis=1)
+        image_attrs = np.argmax(attr_scores[keep_boxes].numpy()[:, 1:], axis=1)
         info = {
             'image_id': im_file.split('.')[0],
             'image_h': np.size(im, 0),
@@ -220,7 +226,7 @@ def save_roi_features_by_bbox(args, cfg, im_file, im, dataset_dict, boxes, score
             'objects_conf': image_objects_conf,
             'attrs_id': image_attrs,
             'attrs_conf': image_attrs_conf,
-            }
+        }
     else:
         info = {
             'image_id': im_file.split('.')[0],
@@ -229,7 +235,8 @@ def save_roi_features_by_bbox(args, cfg, im_file, im, dataset_dict, boxes, score
             'num_boxes': len(keep_boxes),
             'objects_id': image_objects,
             'objects_conf': image_objects_conf
-            }
+        }
 
     output_file = os.path.join(args.output_dir, im_file.split('.')[0])
-    np.savez_compressed(output_file, x=image_feat, bbox=image_bboxes, num_bbox=len(keep_boxes), image_h=np.size(im, 0), image_w=np.size(im, 1), info=info) 
+    np.savez_compressed(output_file, x=image_feat, bbox=image_bboxes, num_bbox=len(keep_boxes), image_h=np.size(im, 0),
+                        image_w=np.size(im, 1), info=info)

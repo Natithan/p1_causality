@@ -15,7 +15,7 @@ from tensorpack import LMDBSerializer
 from tqdm import tqdm
 
 from constants import LMDB_PATH, ROOT_DIR, MTURK_DIR
-from raw__img_text__to__lmdb_region_feats_text import CoCaDataFlow, setup
+from preprocess import CoCaDataFlow, setup
 IMG_ONLY = True
 COUNT_FILE = 'cooc_counts_img'
 # region Flags stuff

@@ -121,8 +121,6 @@ class GeneralizedBUARCNN(nn.Module):
         """
         assert not self.training
 
-        # Nathan: dataparallel is not able to put the whole model on right GPU due to non-canonical structure
-        self.device = self.backbone.res2[0].shortcut.weight.device
         images = self.preprocess_image(batched_inputs)
         features = self.backbone(images.tensor)
 

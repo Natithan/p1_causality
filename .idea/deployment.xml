@@ -116,6 +116,20 @@
           </mappings>
         </serverdata>
       </paths>
+      <paths name="nathan@gimli.cs.kuleuven.be:22">
+        <serverdata>
+          <mappings>
+            <mapping deploy="/p1_causality" local="$PROJECT_DIR$" />
+          </mappings>
+        </serverdata>
+      </paths>
+      <paths name="nathan@gimli.cs.kuleuven.be:22 key">
+        <serverdata>
+          <mappings>
+            <mapping deploy="/cw/liir/NoCsBack/testliir/nathan/p1_causality" local="$PROJECT_DIR$" />
+          </mappings>
+        </serverdata>
+      </paths>
       <paths name="nathan@sauron.cs.kuleuven.be:22">
         <serverdata>
           <mappings>
