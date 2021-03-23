@@ -14,7 +14,7 @@ import numpy as np
 from tensorpack import LMDBSerializer
 from tqdm import tqdm
 
-from constants import LMDB_PATH, ROOT_DIR, MTURK_DIR
+from constants import OLD_10_100_LMDB_PATH, ROOT_DIR, MTURK_DIR
 from preprocess import CoCaDataFlow, setup
 IMG_ONLY = True
 COUNT_FILE = 'cooc_counts_img'
@@ -29,7 +29,7 @@ FGS(sys.argv)
 
 
 def main():  # TODO make this (a lot) faster
-    ds = LMDBSerializer.load(LMDB_PATH, shuffle=False)
+    ds = LMDBSerializer.load(OLD_10_100_LMDB_PATH, shuffle=False)
     ds.reset_state()
     NB_CLASSES = 1601
     if os.path.exists(COUNT_FILE):

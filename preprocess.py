@@ -23,8 +23,8 @@ import os
 import cv2
 import numpy as np
 from util import index_df_column, open_tsv
-from torch.nn.parallel._functions import Scatter
-from torch.nn.parallel import DataParallel
+
+
 import torch
 
 from detectron2.checkpoint import DetectionCheckpointer
@@ -41,32 +41,19 @@ import ray
 from ray.actor import ActorHandle
 
 FIELDNAMES = ['image_id', 'image_w', 'image_h', 'num_boxes', 'boxes', 'features', 'cls_prob']
+WORLD_SIZE = len(FGS.gpus)
+LOCAL_LMDB_ID = f"{FGS.lmdb_file}_{FGS.local_rank}_of_{WORLD_SIZE}"
 #
 # torch._C._cuda_init()
-input_index_file = Path(FGS.lmdb_folder, f'{FGS.lmdb_file}_{FGS.local_rank}_{FGS.index_file}')
-torch.cuda.set_device(FGS.local_rank)
+input_index_file = Path(FGS.lmdb_folder, f'{LOCAL_LMDB_ID}_{FGS.index_file}')
+torch.cuda.set_device(int(FGS.gpus[FGS.local_rank]))
 import torch.distributed as dist
 
 os.environ['MASTER_ADDR'] = '127.0.0.1'
 os.environ['MASTER_PORT'] = '29500'
-dist.init_process_group('nccl', rank=FGS.local_rank, world_size=torch.cuda.device_count())
-# --mode
-# caffe
-# --num-cpus
-# 32
-# --gpus
-# '0,1,2,3'
-# --extract-mode
-# roi_feats
-# --min-max-boxes
-# 10,100
-# --config-file
-# buatest/configs/bua-caffe/extract-bua-caffe-r101.yaml
-# --image-dir
-# /cw/liir/NoCsBack/testliir/datasets/ConceptualCaptions/training
-# --mydebug
-# --num_samples
-# 10
+dist.init_process_group('nccl', rank=FGS.local_rank, world_size=len(FGS.gpus))
+
+
 def switch_extract_mode(mode):
     if mode == 'roi_feats':
         switch_cmd = ['MODEL.BUA.EXTRACTOR.MODE', 1]
@@ -213,7 +200,7 @@ class CoCaInputDataflow(DataFlow):
                 self.image_ids.append(f.name)
             with open(cached_id_path,'wb') as f:
                 pickle.dump(self.image_ids, f)
-        self.image_ids = self.image_ids[FGS.local_rank::get_world_size()]
+        self.image_ids = self.image_ids[FGS.local_rank::WORLD_SIZE]
         print(f"Done gathering image paths after {time() - s} seconds")
         self.num_files = len(self.image_ids)
         print('Number of images: {}.'.format(self.num_files))
@@ -225,8 +212,10 @@ class CoCaInputDataflow(DataFlow):
         caption_path = Path(STORAGE_DIR, caption_file)
 
         if os.path.exists(caption_path):
-            print(f"Not storing {caption_file}, already present at {caption_path}")
+            print(f"Not generating captions and storing them, loading from {caption_path}.")
+            s = time()
             self.captions = json.load(open(caption_path, 'r'))
+            print(f"Loaded captions in {time() - s}.")
         else:
             df = open_tsv(Path(ROOT_DIR, 'DeVLBert/tools/DownloadConcptualCaption/Train_GCC-training.tsv'), 'training')
             print("Indexing captions ...")
@@ -236,10 +225,10 @@ class CoCaInputDataflow(DataFlow):
             self.captions = {}
             for d in l:
                 self.captions = {**self.captions, **d}
-            print("Done")
+            print("Done indexing captions")
             print(f"Storing caption_train.json ...")
             json.dump(self.captions, open(caption_path, 'w'))
-            print(f"Done")
+            print(f"Done storing captions")
         # endregion
 
         self.clean_count = 0
@@ -258,6 +247,7 @@ class CoCaInputDataflow(DataFlow):
 
     def __iter__(self):
         for image_id in self.image_ids[self.total_count():]:
+            s = time()
             im = cv2.imread(os.path.join(self.image_dir, image_id)) #TODO maybe parallelize this with CPUs to not make it a bottleneck?
 
             if self.clean_count % CHECKPOINT_FREQUENCY == 0:
@@ -269,7 +259,7 @@ class CoCaInputDataflow(DataFlow):
                 self.dirty_count += 1
                 continue
             self.clean_count += 1
-
+            # print(f"{type(self).__name__} iteration: {round(time() - s,3)} s\r\n")
             yield {**get_image_blob(im, FGS.pixel_mean),
                    "img_id": image_id,
                    "img_width": im.shape[0],
@@ -281,6 +271,7 @@ class CoCaInputDataflow(DataFlow):
 
 class CoCaDataFlow(RNGDataFlow):
     """
+    RPN input to filtered RPN output
     """
 
     def __init__(self, cfg, args, shuffle=False):
@@ -302,7 +293,7 @@ class CoCaDataFlow(RNGDataFlow):
 
     def __iter__(self):
         for data_dict in self.img_to_input_df.get_data():
-
+            s = time()
             rcnn_input = [{k: list(v)[i] for k, v in data_dict.items()} for i, _ in enumerate(
                 list(data_dict.values())[0])]  # tensorpack dataflow gives dict of lists, rcnn expects list of dicts
             with torch.set_grad_enabled(False):
@@ -335,6 +326,7 @@ class CoCaDataFlow(RNGDataFlow):
                 keep_scores.append(single_scores[keep_idxs_single].numpy())
                 num_boxes.append(len(keep_idxs_single))
 
+            # print(f"{type(self).__name__} iteration: {round(time() - s, 3)} s\r\n")
             for f, s, b, nb, h, w, i, c in zip(keep_feats, keep_scores, keep_og_boxes, num_boxes,
                                                data_dict['img_height'], data_dict['img_width'], data_dict['img_id'],
                                                data_dict['caption']):
@@ -343,14 +335,15 @@ class CoCaDataFlow(RNGDataFlow):
 
 def main():
     args = FGS
+    print(f"Setting up")
     start = time()
     cfg = setup(args)
     print(f"Setup done after {time() - start}")
 
-    ds = CoCaDataFlow(cfg, args)  # TODO fix RuntimeError: No CUDA GPUs are available
+    ds = CoCaDataFlow(cfg, args)
 
     print(f"Conceptual_Caption init done after {time() - start}")
-    lmdb_path = str(Path(FGS.lmdb_folder, f'{FGS.lmdb_file}_{FGS.local_rank}.lmdb'))
+    lmdb_path = str(Path(FGS.lmdb_folder, f'{LOCAL_LMDB_ID}.lmdb'))
     MyLMDBSerializer.save(ds, lmdb_path,
                           write_frequency=CHECKPOINT_FREQUENCY)
     print(f"Done after {time() - start}")

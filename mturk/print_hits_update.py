@@ -43,15 +43,15 @@ def get_remaining_for_pair(cl):
 def get_assignment_results_per_worker(cl):
     assignments = [a for hid in ALL_HIDS for a in cl.list_assignments_for_hit(HITId=hid)['Assignments']]
 
-    answer_regex = r'"marginal_url_y":".+?","word_X":"(.+?)","word_Y":"(.+?)","cause_directions":"(.+?)"'
-    aa = [(a['WorkerId'], a['AssignmentStatus'], tripl) for a in assignments for tripl in
+    answer_regex = r'"marginal_url_y":".+?","word_X":"(.+?)","word_Y":"(.+?)","cause_directions":"(.+?)","confounders":"(.*?)","confidences":"confidence_(.+?)"}'
+    aa = [(a['WorkerId'], a['AssignmentStatus'], tpl) for a in assignments for tpl in
           re.findall(answer_regex, a['Answer'])]
     dic = {}
-    for wid, ass_status, pair in aa:
+    for wid, ass_status, tpl in aa:
         if wid in dic:
-            dic[wid] += [(pair, ass_status)]
+            dic[wid] += [(tpl, ass_status)]
         else:
-            dic[wid] = [(pair, ass_status)]
+            dic[wid] = [(tpl, ass_status)]
     return dic
 
 if __name__ == '__main__':

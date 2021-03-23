@@ -18,7 +18,7 @@ from torch.utils.data.sampler import Sampler
 import torch.distributed as dist
 import sys
 import pdb
-from util import MyLMDBSerializer
+from preprocess_util import MyLMDBSerializer
 ROOT_FOLDER = "/cw/liir/NoCsBack/testliir/nathan/p1_causality/"
 # REGION_LEN = 84
 REGION_LEN = 36

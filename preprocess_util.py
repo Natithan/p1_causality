@@ -146,21 +146,6 @@ class MyLMDBSerializer:
             txn = put_or_grow(txn, key, value)
             return txn
 
-        # #Nathan
-        # idxs = {}
-        # start = 0
-        # if not FGS.from_scratch:
-        #     if os.path.exists(FGS.lmdb_index_file):
-        #         idxs = pickle.load(open(FGS.lmdb_index_file, 'rb'))
-        #         if path in idxs:
-        #             start = idxs[path]
-        #         else:
-        #             idxs[path] = start
-        #             pickle.dump(idxs, open(FGS.lmdb_index_file, 'wb'))
-        #     else:
-        #         idxs[path] = start
-        #         pickle.dump(idxs, open(FGS.lmdb_index_file, 'wb'))
-
         txn = db.begin(write=True)
         previous_idx = txn.stat()['entries']
         if FGS.local_rank == 0:
@@ -171,19 +156,13 @@ class MyLMDBSerializer:
                 # although it has a context manager interface
                 for idx, dp in enumerate(df):
                     real_idx = previous_idx + idx
-                    # if real_idx % CHECKPOINT_FREQUENCY == 0:
-                    #     idxs[path] = real_idx
-                    #     pickle.dump(idxs, open(FGS.lmdb_index_file,'wb'))
-                    # txn = put_or_grow(txn, u'{:08}'.format(idx).encode('ascii'), dumps(dp))
                     txn = put_or_grow(txn, enc(real_idx), dumps(dp))
                     pbar.update()
-                    # if (real_idx + 1) % write_frequency == 0:
                     if real_idx % write_frequency == 0:
                         txn.commit()
                         txn = db.begin(write=True)
                 txn.commit()
 
-                # keys = [u'{:08}'.format(k).encode('ascii') for k in range(idx + 1)]
                 keys = [enc(k) for k in range(real_idx)]
                 with db.begin(write=True) as txn:
                     txn = put_or_grow(txn, b'__keys__', dumps(keys))
@@ -197,18 +176,12 @@ class MyLMDBSerializer:
             # although it has a context manager interface
             for idx, dp in enumerate(df):
                 real_idx = previous_idx + idx
-                # if real_idx % CHECKPOINT_FREQUENCY == 0:
-                #     idxs[path] = real_idx
-                #     pickle.dump(idxs, open(FGS.lmdb_index_file,'wb'))
-                # txn = put_or_grow(txn, u'{:08}'.format(idx).encode('ascii'), dumps(dp))
                 txn = put_or_grow(txn, enc(real_idx), dumps(dp))
                 # if (real_idx + 1) % write_frequency == 0:
                 if real_idx % write_frequency == 0:
                     txn.commit()
                     txn = db.begin(write=True)
             txn.commit()
-
-            # keys = [u'{:08}'.format(k).encode('ascii') for k in range(idx + 1)]
             keys = [enc(k) for k in range(real_idx)]
             with db.begin(write=True) as txn:
                 txn = put_or_grow(txn, b'__keys__', dumps(keys))
@@ -226,7 +199,9 @@ class MyLMDBSerializer:
             If you found deserialization being the bottleneck, you can use :class:`LMDBData` as the reader
             and run deserialization as a mapper in parallel.
         """
-        df = LMDBData(path, shuffle=shuffle)
+        # df = LMDBData(path, shuffle=shuffle)
+        # #TODO if I end up storing multiple LMDB databases, this interleaved loading is not necessary anymore
+        df = MyLMDBData(path, shuffle=shuffle,rank=rank,nb_processes=nb_processes)
         return MapData(df, MyLMDBSerializer._deserialize_lmdb)
 
     @staticmethod
@@ -240,3 +215,25 @@ def get_world_size() -> int:
     if not dist.is_initialized():
         return 1
     return dist.get_world_size()
+
+
+class MyLMDBData(LMDBData):
+    def __init__(self, lmdb_path, shuffle=True, keys=None, rank=None, nb_processes=None):
+        self.rank = rank
+        self.nb_processes = nb_processes
+        super().__init__(lmdb_path, shuffle, keys)
+
+    def _set_keys(self, keys=None):
+        all_keys = loads(self._txn.get(b'__keys__'))
+        self.keys = all_keys[self.rank::self.nb_processes]
+
+    def __iter__(self):
+        with self._guard:
+            if self._shuffle:
+                self.rng.shuffle(self.keys)
+            for k in self.keys:
+                v = self._txn.get(k)
+                yield [k, v]
+
+    def __len__(self):
+        return len(self.keys)

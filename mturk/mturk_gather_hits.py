@@ -52,3 +52,188 @@ def get_results_for_pair(results):
 
 if __name__ == '__main__':
     main()
+
+# from easyturk import EasyTurk
+# import re
+#
+# from mturk.mturk_util import ALL_HIDS
+#
+# et = EasyTurk(sandbox=False)
+# cl = et.mtc
+#
+#
+# def get_remaining_for_pair(cl):
+#     all_hits = [cl.get_hit(HITId=hid)['HIT'] for hid in ALL_HIDS]
+#     max_ass = all_hits[0]['MaxAssignments']
+#     assignments = [cl.list_assignments_for_hit(HITId=hid)['Assignments'] for hid in ALL_HIDS]
+#     answer_regex = r'"marginal_url_y":".+?","word_X":"(.+?)","word_Y":"(.+?)"'
+#     pair_answers = [pair for a in assignments for d in a for pair in re.findall(answer_regex, d['Answer'])]
+#     remaining_for_pair = {p: max_ass - pair_answers.count(p) for p in set(pair_answers)}
+#     return remaining_for_pair
+#
+#
+# def get_assignment_results_per_worker(cl):
+#     assignments = [a for hid in ALL_HIDS for a in cl.list_assignments_for_hit(HITId=hid)['Assignments']]
+#
+#     answer_regex = r'"marginal_url_y":".+?","word_X":"(.+?)","word_Y":"(.+?)","cause_directions":"(.+?)"'
+#     aa = [(a['WorkerId'], a['AssignmentStatus'], tripl) for a in assignments for tripl in
+#           re.findall(answer_regex, a['Answer'])]
+#     dic = {}
+#     for wid, ass_status, pair in aa:
+#         if wid in dic:
+#             dic[wid] += [(pair, ass_status)]
+#         else:
+#             dic[wid] = [(pair, ass_status)]
+#     return dic
+#
+#
+# afw = get_assignment_results_per_worker(cl)
+# rfp = {k: v for k, v in get_remaining_for_pair(cl).items() if v > 0}
+# from mturk.mturk_util import ALL_HIDS
+#
+# assignments = [a for hid in ALL_HIDS for a in cl.list_assignments_for_hit(HITId=hid)['Assignments']]
+#
+# answer_regex = r'"marginal_url_y":".+?","word_X":"(.+?)","word_Y":"(.+?)","cause_directions":"(.+?)","confounders":"(.+?)","confidences":"confidence_(.+?)"'
+# aa = [(a['WorkerId'], a['AssignmentStatus'], tpl) for a in assignments for tpl in
+#       re.findall(answer_regex, a['Answer'])]
+# dic = {}
+# for wid, ass_status, tpl in aa:
+#     if wid in dic:
+#         dic[wid] += [(tpl, ass_status)]
+#     else:
+#         dic[wid] = [(tpl, ass_status)]
+#
+# answer_regex = r'"marginal_url_y":".+?","word_X":"(.+?)","word_Y":"(.+?)","cause_directions":"(.+?)","confounders":"(.+?)","confidences":"confidence_(.+?)"}'
+# aa = [(a['WorkerId'], a['AssignmentStatus'], tpl) for a in assignments for tpl in
+#       re.findall(answer_regex, a['Answer'])]
+# dic = {}
+# for wid, ass_status, tpl in aa:
+#     if wid in dic:
+#         dic[wid] += [(tpl, ass_status)]
+#     else:
+#         dic[wid] = [(tpl, ass_status)]
+#
+# answer_regex = r'"marginal_url_y":".+?","word_X":"(.+?)","word_Y":"(.+?)","cause_directions":"(.+?)","confounders":"(.*?)","confidences":"confidence_(.+?)"}'
+# aa = [(a['WorkerId'], a['AssignmentStatus'], tpl) for a in assignments for tpl in
+#       re.findall(answer_regex, a['Answer'])]
+# dic = {}
+# for wid, ass_status, tpl in aa:
+#     if wid in dic:
+#         dic[wid] += [(tpl, ass_status)]
+#     else:
+#         dic[wid] = [(tpl, ass_status)]
+#
+# for wid in dic:
+#     print(wid)
+#
+# import random
+#
+# for wid in dic:
+#     print(wid)
+#     print(random.sample(dic[wid]), 10)
+#
+# for wid in dic:
+#     print(wid)
+#     print(random.sample(dic[wid], 10))
+#
+# for wid in dic:
+#     print(wid)
+#     if len(dic[wid]) > 10:
+#         print(random.sample(dic[wid], 10))
+#     else:
+#         print(dic[wid])
+#
+# OK_LIST = [
+#     'AVIEE6LDH0BT5', 'AE3ZQZ2Z81Z11'
+# ]
+# OK_LIST = [
+#     'AVIEE6LDH0BT5', 'AE3ZQZ2Z81Z11', 'AKQAI78JTXXC9', 'A3UWHJTAUTF6TO', 'A2ZP67F7PDFFLF', ''
+# ]
+# rfp[('pillows', 'player')]
+# rfp[('player', 'pillows')]
+# [v[i] for _, v in afw.keys() for i in v if (('player' in v[i][0]) and ('pillow' in v[i][0]))]
+# [v[i] for v in afw.values() for i in v if (('player' in v[i][0]) and ('pillow' in v[i][0]))]
+# [i for v in afw.values() for i in v if (('player' in v[i][0]) and ('pillow' in v[i][0]))]
+# [v[i] for v in afw.values() for i in v if (('player' in i[0]) and ('pillow' in i[0]))]
+# [i for v in afw.values() for i in v if (('player' in i[0]) and ('pillow' in i[0]))]
+# [i for v in afw.values() for i in v if (('player' in i[0]))]
+# [i for v in afw.values() for i in v if (('player' in i[0]) and ('pillows' in i[0]))]
+# [i for v in dic.values() for i in v if (('player' in i[0]) and ('pillows' in i[0]))]
+# for wid in dic:
+#     print(wid, len(dic[wid]))
+#     if len(dic[wid]) > 10:
+#         print(random.sample(dic[wid], 10))
+#     else:
+#         print(dic[wid])
+#
+# OK_LIST = [
+#     'AVIEE6LDH0BT5', 'AE3ZQZ2Z81Z11', 'AKQAI78JTXXC9', 'A3UWHJTAUTF6TO', 'A2ZP67F7PDFFLF', ''
+# ]
+# DOUBT_LIST = [
+#
+# ]
+#
+# OK_LIST = [
+#     'AVIEE6LDH0BT5', 'AE3ZQZ2Z81Z11', 'AKQAI78JTXXC9', 'A3UWHJTAUTF6TO', 'A2ZP67F7PDFFLF', ''
+# ]
+# DOUBT_LIST = [
+#     'A1SX8IVV82M0LW'
+# ]
+# ALREADY_APPROVED_LIST = [
+#     'A3W2RRAUPHYRIO'
+# ]
+# for wid in dic:
+#     non_approved = [a for a in dic[wid] if a[1] != 'Approved']
+#     print(wid, len(dic[wid]), len(non_approved))
+#     if len(non_approved) > 10:
+#         print(random.sample(dic[wid], 10))
+#     else:
+#         print(non_approved)
+#
+# for wid in dic:
+#     non_approved = [a for a in dic[wid] if a[1] != 'Approved']
+#     print(wid, len(dic[wid]), len(non_approved))
+#     if len(non_approved) > 10:
+#         print(random.sample(non_approved, 10))
+#     else:
+#         print(non_approved)
+#
+# OK_LIST = [
+#     'AVIEE6LDH0BT5', 'AE3ZQZ2Z81Z11', 'AKQAI78JTXXC9', 'A3UWHJTAUTF6TO', 'A2ZP67F7PDFFLF', 'AX7K5UODLEK72',
+#     'A1RF95TSDZDJLL', 'A16U1L4R6WV5G2', 'A11HTUAZMFBEO7',
+#     'A2QX3YJXAAHHVV', 'A1LLW7JQ0IECHQ', 'A3AOE0Y5VK6JYF', 'AYHIH9NTPYFLY', 'AHXHM1PQTRWIQ', 'A26RIX88SGQT0S',
+#     'A1V8FJHR0XVNCV', 'AQ6P4JFUUXXN9', 'ALKQPW0O9C98N', 'A1BQ71W4QHT62P'
+# ]
+# DOUBT_LIST = [
+#     'A1SX8IVV82M0LW', 'A2SXYRKIP3J9CJ', 'A3HJNOCKXFOOVP'
+# ]
+# ALREADY_APPROVED_LIST = [
+#     'A3W2RRAUPHYRIO', 'AEBY6S5MX5O8R', 'A302KOFOYLD89A', 'A2RWD6C4G4RMW6', 'A28IR8BBKC2CQJ'
+# ]
+# for wid in dic:
+#     if not wid in DOUBT_LIST:
+#         continue
+#     non_approved = [a for a in dic[wid] if a[1] != 'Approved']
+#     print(wid, len(dic[wid]), len(non_approved))
+#     if len(non_approved) > 10:
+#         print(random.sample(non_approved, 10))
+#     else:
+#         print(non_approved)
+#
+# OK_LIST.append('A1SX8IVV82M0LW')
+# DOUBT_LIST = [
+#     'A2SXYRKIP3J9CJ', 'A3HJNOCKXFOOVP'
+# ]
+# REJECT_LIST = DOUBT_LIST
+# approve_ass_ids = [a['AssignmentId'] for a in assignments if a['WorkerId'] in OK_LIST]
+# reject_ass_ids = [a['AssignmentId'] for a in assignments if a['WorkerId'] in REJECT_LIST]
+# len([a['AssignmentId'] for a in assignments if a['AssignmentStatus'] != 'Submitted'])
+# approve_ass_ids = [a['AssignmentId'] for a in assignments if
+#                    a['WorkerId'] in OK_LIST and a['AssignmentStatus'] == 'Submitted']
+# reject_ass_ids = [a['AssignmentId'] for a in assignments if
+#                   a['WorkerId'] in REJECT_LIST and a['AssignmentStatus'] == 'Submitted']
+# for app in approve_ass_ids:
+#     cl.approve_assignment(AssignmentId=app, RequesterFeedback='Well done!')
+#
+# A2SXYRKIP3J9CJ_ass = [a['AssignmentId'] for a in assignments if
+#                       a['WorkerId'] == 'A2SXYRKIP3J9CJ' and a['AssignmentStatus'] == 'Submitted']

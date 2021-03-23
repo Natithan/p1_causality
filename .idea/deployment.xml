@@ -42,7 +42,7 @@
       <paths name="Copy of project-level server 'rose'">
         <serverdata>
           <mappings>
-            <mapping local="$PROJECT_DIR$" web="/" />
+            <mapping deploy="/cw/liir/NoCsBack/testliir/nathan/p1_causality" local="$PROJECT_DIR$" />
           </mappings>
         </serverdata>
       </paths>

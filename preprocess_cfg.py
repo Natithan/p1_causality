@@ -27,6 +27,6 @@ flags.DEFINE_integer("num_samples", 0, "number of samples to convert, 0 means al
 flags.DEFINE_string("lmdb_file", f'training_feat_debug_{int(time())}', "")
 flags.DEFINE_string("lmdb_folder", "/cw/liir/NoCsBack/testliir/nathan/p1_causality/DeVLBert/features_lmdb/CC", "")
 flags.DEFINE_integer("local_rank", 0, "for torch.distributed")
-flags.DEFINE_bool("distributed", False, "")
+flags.DEFINE_list("gpus", [0,1,2,3], "Adjust this if you can only use a subset")
 
 FGS(sys.argv)

@@ -234,6 +234,13 @@
             </Attribute>
           </value>
         </entry>
+        <entry key="\test_confounder_finding.py">
+          <value>
+            <Attribute>
+              <option name="separator" value="," />
+            </Attribute>
+          </value>
+        </entry>
         <entry key="\test_cuda_gimli.py">
           <value>
             <Attribute>

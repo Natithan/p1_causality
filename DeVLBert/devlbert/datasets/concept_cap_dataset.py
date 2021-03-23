@@ -9,7 +9,7 @@ import numpy as np
 import tensorpack.dataflow as td
 
 import torch
-from constants import LMDB_PATH, CAPTION_PATH
+from constants import CAPTION_PATH, LMDB_PATHS
 from torch.utils.data import Dataset
 from torch.utils.data.sampler import Sampler
 import torch.distributed as dist
@@ -107,10 +107,10 @@ class ConceptCapLoaderTrain(object):
 
     def __init__(
             self,
-            corpus_path,
             tokenizer,
             seq_len,
             encoding="utf-8",
+            lmdb_path=None,
             predict_feature=False,
             hard_negative=False,
             batch_size=512,
@@ -122,19 +122,21 @@ class ConceptCapLoaderTrain(object):
             distributed=False,
             visualization=False,
     ):
-
-        if dist.is_available() and distributed:
-            num_replicas = dist.get_world_size()
-            # assert num_replicas == 8
-            rank = dist.get_rank()
-            lmdb_file = "/mnt3/xuesheng/features_lmdb/CC/training_feat_part_" + str(rank) + ".lmdb"
-            # if not os.path.exists(lmdb_file):
-            # lmdb_file = "/srv/share/datasets/conceptual_caption/training_feat_part_" + str(rank) + ".lmdb"
+        if lmdb_path:
+            lmdb_file = lmdb_path
         else:
-            # lmdb_file = "/coc/dataset/conceptual_caption/training_feat_all.lmdb"
-            # if not os.path.exists(lmdb_file):
-            lmdb_file = LMDB_PATH
-            # lmdb_file = "/mnt3/xuesheng/features_lmdb/CC/training_feat_part_0.lmdb" #Nathan
+            if dist.is_available() and distributed:
+                num_replicas = dist.get_world_size()
+                # assert num_replicas == 8
+                rank = dist.get_rank()
+                lmdb_file = LMDB_PATHS[rank]
+                # if not os.path.exists(lmdb_file):
+                # lmdb_file = "/srv/share/datasets/conceptual_caption/training_feat_part_" + str(rank) + ".lmdb"
+            else:
+                # lmdb_file = "/coc/dataset/conceptual_caption/training_feat_all.lmdb"
+                # if not os.path.exists(lmdb_file):
+                lmdb_file = LMDB_PATHS[0]
+                # lmdb_file = "/mnt3/xuesheng/features_lmdb/CC/training_feat_part_0.lmdb" #Nathan
 
         caption_path = CAPTION_PATH
         # caption_path = "/mnt3/xuesheng/features_lmdb/CC/caption_train.json"
