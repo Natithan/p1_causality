@@ -66,10 +66,14 @@ def main():
             filtered_responses = \
                 responses[responses.apply(lambda row:
                                           row['max_resp_fraction'] >= min_agreement and
-                                          row['max_resp_count'] >= 5 and
-                                          row['max_resp'] in ['x-to-y', 'y-to-x'], axis=1)]
+                                          row['max_resp'] != 'x-is-y' and
+                                          len(row['cause_directions']) >= 5,
+                                                                               axis=1)]
+            cause_only_responses = filtered_responses[filtered_responses.apply(lambda row:
+                                                                               row['max_resp'] in ['x-to-y', 'y-to-x'],
+                                                                               axis=1)]
             x_to_y = [(a.word_X, a.word_Y) if a.max_resp == 'x-to-y' else (a.word_Y, a.word_X) for a in
-                      filtered_responses.itertuples(index=False)]
+                      cause_only_responses.itertuples(index=False)]
             ys_for_x = defaultdict(list)
             for x, y in x_to_y:
                 ys_for_x[x] += [y]
@@ -78,12 +82,21 @@ def main():
                               combinations(ys_for_x[cause], 2) if
                               len(ys_for_x[cause]) > 1]
 
-            file_id = f'conf_triples_{min_agreement}_{cfdnce_setting}'
             dir = Path(MTURK_DIR,'output_mturk')
-            with open(Path(dir, f'{file_id}.txt'), 'w') as f:
+
+            # storing pairs
+            pair_file_id = f'pair_annotations_{min_agreement}_{cfdnce_setting}'
+            pair_file_path = Path(dir, f'{pair_file_id}.tsv')
+            filtered_responses[['word_X', 'word_Y', 'max_resp']].to_csv(pair_file_path, sep='\t', index=False)
+
+            # storing triplets
+            conf_file_id = f'conf_triples_{min_agreement}_{cfdnce_setting}'
+            with open(Path(dir, f'{conf_file_id}.txt'), 'w') as f:
                 f.truncate(0)
                 for t in confnd_triples:
                     f.write(t + "\r\n")
+
+
 
 
 if __name__ == '__main__':

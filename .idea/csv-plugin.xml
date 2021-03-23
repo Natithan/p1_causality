@@ -150,6 +150,13 @@
             </Attribute>
           </value>
         </entry>
+        <entry key="\get_confounders.py">
+          <value>
+            <Attribute>
+              <option name="separator" value="," />
+            </Attribute>
+          </value>
+        </entry>
         <entry key="\mturk.py">
           <value>
             <Attribute>
