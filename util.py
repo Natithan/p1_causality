@@ -9,6 +9,8 @@ import matplotlib.pyplot as plt
 from matplotlib.patches import Rectangle
 import random
 import numpy as np
+import re
+from torch import distributed as dist
 
 from tools.DownloadConcptualCaption.download_data import _file_name
 
@@ -17,6 +19,25 @@ with open("/cw/liir/NoCsBack/testliir/nathan/p1_causality/DeVLBert/dic/objects_v
 
 IMAGE_DIR = "/cw/liir/NoCsBack/testliir/datasets/ConceptualCaptions/training"
 TIME = round(time())
+
+
+def distributed(args) -> bool:
+    return args.local_rank != -1
+
+
+def get_free_gpus():
+    regex = r"MB \|(.*?)\n"
+    processes = [re.search(regex, l).groups()[0] for l in os.popen('gpustat --no-header').readlines()]
+    free_gpus = [i for i, p in enumerate(processes) if len(p) == 0]
+    return free_gpus
+
+def rank_to_free_gpu(rank):
+    '''
+    For when not all GPUs on the device can be used
+    '''
+    free_gpus = get_free_gpus()
+    assert len(free_gpus) > rank, "Rank larger than number of available GPUs"
+    return free_gpus[rank]
 
 def show_from_tuple(rpn_tuple):
     _, cls_probs, bboxes, _, _, _, img_id, caption = rpn_tuple
@@ -56,3 +77,10 @@ def open_tsv(fname, folder):
     print("Processing", len(df), " Images:")
     return df
 
+
+def world_size() -> int:
+    if not dist.is_available():
+        return 1
+    if not dist.is_initialized():
+        return 1
+    return dist.get_world_size()

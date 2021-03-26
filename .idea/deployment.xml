@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <project version="4">
-  <component name="PublishConfigData" autoUpload="Always" serverName="shared" remoteFilesAllowedToDisappearOnAutoupload="false">
+  <component name="PublishConfigData" autoUpload="Always" serverName="shared" exclude=".svn;.cvs;.idea;.DS_Store;.git;.hg;*.hprof;*.pyc;cooc_counts_*;Train_GCC-training.tsv;z_archive" remoteFilesAllowedToDisappearOnAutoupload="false">
     <serverData>
       <paths name="Copy of project-level server 'arwen'">
         <serverdata>
@@ -42,8 +42,11 @@
       <paths name="Copy of project-level server 'rose'">
         <serverdata>
           <mappings>
-            <mapping deploy="/cw/liir/NoCsBack/testliir/nathan/p1_causality" local="$PROJECT_DIR$" />
+            <mapping deploy="/" local="$PROJECT_DIR$" />
           </mappings>
+          <excludedPaths>
+            <excludedPath path="/p1_causality/DeVLBert/tools/DownloadConcptualCaption/Train_GCC-training.tsv" />
+          </excludedPaths>
         </serverdata>
       </paths>
       <paths name="arwen">
@@ -166,6 +169,13 @@
             <mapping deploy="/p1_causality/buatest" local="$PROJECT_DIR$/buatest" web="/" />
             <mapping deploy="/p1_causality/VC-R-CNN" local="$PROJECT_DIR$/VC-R-CNN" web="/" />
           </mappings>
+          <excludedPaths>
+            <excludedPath path="Train_GCC-training.tsv" />
+            <excludedPath path="/p1_causality/DeVLBert/checkpoint" />
+            <excludedPath path="/p1_causality/DeVLBert/save" />
+            <excludedPath path="/p1_causality/DeVLBert/features_lmdb" />
+            <excludedPath path="/p1_causality/DeVLBert/tools/DownloadConcptualCaption/Validation_GCC-1.1.0-Validation.tsv" />
+          </excludedPaths>
         </serverdata>
       </paths>
     </serverData>

@@ -12,7 +12,7 @@ import csv
 from pathlib import Path
 from tensorpack.dataflow import DataFlow, RNGDataFlow, BatchData
 from constants import CHECKPOINT_FREQUENCY, ROOT_DIR, STORAGE_DIR, BUA_ROOT_DIR
-from preprocess_util import MyLMDBSerializer, get_world_size
+from my_lmdb import MyLMDBSerializer
 import sys
 
 csv.field_size_limit(sys.maxsize)
@@ -22,8 +22,7 @@ import os
 
 import cv2
 import numpy as np
-from util import index_df_column, open_tsv
-
+from util import index_df_column, open_tsv, world_size
 
 import torch
 
@@ -204,7 +203,7 @@ class CoCaInputDataflow(DataFlow):
         print(f"Done gathering image paths after {time() - s} seconds")
         self.num_files = len(self.image_ids)
         print('Number of images: {}.'.format(self.num_files))
-        print(FGS.local_rank,get_world_size())
+        print(FGS.local_rank, world_size())
 
 
         # region Storing / loading captions
@@ -345,7 +344,7 @@ def main():
     print(f"Conceptual_Caption init done after {time() - start}")
     lmdb_path = str(Path(FGS.lmdb_folder, f'{LOCAL_LMDB_ID}.lmdb'))
     MyLMDBSerializer.save(ds, lmdb_path,
-                          write_frequency=CHECKPOINT_FREQUENCY)
+                          write_frequency=CHECKPOINT_FREQUENCY, args=FGS)
     print(f"Done after {time() - start}")
 
 

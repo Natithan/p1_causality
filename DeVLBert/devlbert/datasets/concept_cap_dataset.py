@@ -22,6 +22,8 @@ logging.basicConfig(
     datefmt="%m/%d/%Y %H:%M:%S",
     level=logging.INFO,
 )
+from my_lmdb import MyLMDBSerializer, MyLMDBData
+
 logger = logging.getLogger(__name__)
 
 
@@ -121,6 +123,7 @@ class ConceptCapLoaderTrain(object):
             cuda=False,
             distributed=False,
             visualization=False,
+            savePath=None
     ):
         if lmdb_path:
             lmdb_file = lmdb_path
@@ -129,20 +132,22 @@ class ConceptCapLoaderTrain(object):
                 num_replicas = dist.get_world_size()
                 # assert num_replicas == 8
                 rank = dist.get_rank()
-                lmdb_file = LMDB_PATHS[rank]
                 # if not os.path.exists(lmdb_file):
                 # lmdb_file = "/srv/share/datasets/conceptual_caption/training_feat_part_" + str(rank) + ".lmdb"
             else:
                 # lmdb_file = "/coc/dataset/conceptual_caption/training_feat_all.lmdb"
                 # if not os.path.exists(lmdb_file):
-                lmdb_file = LMDB_PATHS[0]
+                num_replicas = 1
+                rank = 0
+                print(f"WARNING: only loading from {LMDB_PATHS[rank]}")
                 # lmdb_file = "/mnt3/xuesheng/features_lmdb/CC/training_feat_part_0.lmdb" #Nathan
+            lmdb_file = LMDB_PATHS[rank]
 
         caption_path = CAPTION_PATH
         # caption_path = "/mnt3/xuesheng/features_lmdb/CC/caption_train.json"
         print("Loading from %s" % lmdb_file)
 
-        ds = td.LMDBSerializer.load(lmdb_file, shuffle=True)
+        ds = MyLMDBSerializer.load(lmdb_file,rank,num_replicas, shuffle=True,savePath=savePath)
         self.num_dataset = len(ds)
 
         preprocess_function = BertPreprocessBatch(
@@ -166,6 +171,18 @@ class ConceptCapLoaderTrain(object):
 
         self.batch_size = batch_size
         self.num_workers = num_workers
+
+    # Nathan
+    def store_checkpoint(self):
+        # Digging through all the wrappers
+        core_ds = self.get_core_ds()
+        core_ds.store_checkpoint()
+
+    def get_core_ds(self) -> MyLMDBData:
+        core_ds = self.ds
+        while not isinstance(core_ds, MyLMDBData):
+            core_ds = core_ds.ds
+        return core_ds
 
     def __iter__(self):
 
@@ -200,6 +217,9 @@ class ConceptCapLoaderTrain(object):
     def __len__(self):
         return self.ds.size()
 
+    def reset_index(self):
+        core_ds = self.get_core_ds()
+        core_ds.reset_index()
 
 class ConceptCapLoaderVal(object):
     """
@@ -296,6 +316,9 @@ class ConceptCapLoaderVal(object):
     def __len__(self):
         return self.ds.size()
 
+    def reset_index(self):
+        core_ds = self.get_core_ds()
+        core_ds.reset_index()
 
 class BertPreprocessBatch(object):
     def __init__(

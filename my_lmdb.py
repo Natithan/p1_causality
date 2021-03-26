@@ -50,28 +50,23 @@
 # -*- coding: utf-8 -*-
 # File: serialize.py
 import pickle
-
-import torch.distributed as dist
+from pathlib import Path
 import lmdb
-import numpy as np
 import os
 import platform
-from collections import defaultdict
 
 from tensorpack.utils import logger
 from tensorpack.utils.serialize import dumps, loads
 from tensorpack.utils.develop import create_dummy_class  # noqa
 from tensorpack.utils.utils import get_tqdm
 from tensorpack.dataflow.base import DataFlow
-from tensorpack.dataflow.common import FixedSizeData, MapData
-from tensorpack.dataflow.format import HDF5Data, LMDBData
-from tensorpack.dataflow.raw import DataFromGenerator, DataFromList
+from tensorpack.dataflow.common import MapData
+from tensorpack.dataflow.format import LMDBData
 
 __all__ = ['MyLMDBSerializer']
 
-from preprocess_cfg import FGS
-from constants import CHECKPOINT_FREQUENCY
-
+from constants import MODEL_CKPT_DIR
+NB_SAVED_SPLITS = 4
 
 def _reset_df_and_get_size(df):
     df.reset_state()
@@ -81,8 +76,10 @@ def _reset_df_and_get_size(df):
         sz = 0
     return sz
 
+
 def enc(real_idx):
     return u'{:08}'.format(real_idx).encode('ascii')
+
 
 class MyLMDBSerializer:
     """
@@ -101,7 +98,7 @@ class MyLMDBSerializer:
     """
 
     @staticmethod
-    def save(df, path, write_frequency=5000):
+    def save(df, path, write_frequency=5000,args=None):
         """
         Args:
             df (DataFlow): the DataFlow to serialize.
@@ -112,21 +109,21 @@ class MyLMDBSerializer:
         assert isinstance(df, DataFlow), type(df)
         isdir = os.path.isdir(path)
         if isdir:
-            if FGS.from_scratch:
+            if args.from_scratch:
                 assert not os.path.isfile(os.path.join(path, 'data.mdb')), "LMDB file exists!"
             else:
                 print(f"Continuing in file {os.path.join(path, 'data.mdb')}")
         else:
-            if FGS.from_scratch:
+            if args.from_scratch:
                 assert not os.path.isfile(path), "LMDB file {} exists!".format(path)
             else:
                 print(f"Continuing in file {path}")
         # It's OK to use super large map_size on Linux, but not on other platforms
         # See: https://github.com/NVIDIA/DIGITS/issues/206
-        map_size = 1099511627776 * 2 if platform.system() == 'Linux' else 128 * 10**6
+        map_size = 1099511627776 * 2 if platform.system() == 'Linux' else 128 * 10 ** 6
         db = lmdb.open(path, subdir=isdir,
                        map_size=map_size, readonly=False,
-                       meminit=False, map_async=True)    # need sync() at the end
+                       meminit=False, map_async=True)  # need sync() at the end
         size = _reset_df_and_get_size(df)
 
         # put data into lmdb, and doubling the size if full.
@@ -140,7 +137,7 @@ class MyLMDBSerializer:
             txn.abort()
             curr_size = db.info()['map_size']
             new_size = curr_size * 2
-            logger.info("Doubling LMDB map_size to {:.2f}GB".format(new_size / 10**9))
+            logger.info("Doubling LMDB map_size to {:.2f}GB".format(new_size / 10 ** 9))
             db.set_mapsize(new_size)
             txn = db.begin(write=True)
             txn = put_or_grow(txn, key, value)
@@ -148,8 +145,8 @@ class MyLMDBSerializer:
 
         txn = db.begin(write=True)
         previous_idx = txn.stat()['entries']
-        if FGS.local_rank == 0:
-            with get_tqdm(total=size,initial=df.non_batched_img_to_input_df.clean_count) as pbar:
+        if args.local_rank == 0:
+            with get_tqdm(total=size, initial=df.non_batched_img_to_input_df.clean_count) as pbar:
                 idx = 0
                 real_idx = previous_idx + idx
                 # LMDB transaction is not exception-safe!
@@ -190,10 +187,8 @@ class MyLMDBSerializer:
             db.sync()
         db.close()
 
-
-
     @staticmethod
-    def load(path, shuffle=True):
+    def load(path, rank,nb_processes,shuffle=True,savePath=MODEL_CKPT_DIR):
         """
         Note:
             If you found deserialization being the bottleneck, you can use :class:`LMDBData` as the reader
@@ -201,7 +196,7 @@ class MyLMDBSerializer:
         """
         # df = LMDBData(path, shuffle=shuffle)
         # #TODO if I end up storing multiple LMDB databases, this interleaved loading is not necessary anymore
-        df = MyLMDBData(path, shuffle=shuffle,rank=rank,nb_processes=nb_processes)
+        df = MyLMDBData(path, shuffle=shuffle, rank=rank, nb_processes=nb_processes,savePath=savePath)
         return MapData(df, MyLMDBSerializer._deserialize_lmdb)
 
     @staticmethod
@@ -209,29 +204,57 @@ class MyLMDBSerializer:
         return loads(dp[1])
 
 
-def get_world_size() -> int:
-    if not dist.is_available():
-        return 1
-    if not dist.is_initialized():
-        return 1
-    return dist.get_world_size()
-
-
 class MyLMDBData(LMDBData):
-    def __init__(self, lmdb_path, shuffle=True, keys=None, rank=None, nb_processes=None):
+    def __init__(self, lmdb_path, shuffle=True, keys=None, rank=None, nb_processes=None, savePath=MODEL_CKPT_DIR):
         self.rank = rank
-        self.nb_processes = nb_processes
+        self.nb_processes = nb_processes #TODO make this match with torch.distributed.get_world_size() and torch.distributed.get_rank()
+        self.savePath = savePath
+        self.key_index_checkpoint_path = Path(self.savePath, f"key_index_{self.rank}_of_{NB_SAVED_SPLITS}.pickle")
+        self.shuffled_keys_checkpoint_path = Path(self.savePath, f"shuffled_keys_{self.rank}_of_{NB_SAVED_SPLITS}.pickle")
         super().__init__(lmdb_path, shuffle, keys)
 
     def _set_keys(self, keys=None):
         all_keys = loads(self._txn.get(b'__keys__'))
-        self.keys = all_keys[self.rank::self.nb_processes]
+
+        # self.keys = all_keys[self.rank::self.nb_processes]# Changed to having different lmdb files.  TODO maybe this is still useful if loading with more processes than # lmdb files?
+        self.keys = all_keys
+
+    def reset_index(self):
+        self.reset_state()
+
+        # Reset index in keys (no need to restore keys themselves)
+        self.start_key = 0
+        with open(self.key_index_checkpoint_path, 'wb') as f:
+            pickle.dump(self.start_key, f)
+
+    def maybe_load_checkpoint(self):
+        assert Path.exists(self.key_index_checkpoint_path) == Path.exists(self.shuffled_keys_checkpoint_path)
+        if Path.exists(self.key_index_checkpoint_path):
+            print(f"Loading keys and key index from existing file {self.key_index_checkpoint_path}")
+            with open(self.key_index_checkpoint_path, 'rb') as f:
+                self.start_key = pickle.load(f)
+            with open(self.shuffled_keys_checkpoint_path, 'rb') as f:
+                self.keys = pickle.load(f)
+            print(f"Starting at index {self.start_key} out of {len(self.keys)}")
+        else:
+            print('No keys and key index found: starting from scratch')
+            self.start_key = 0
+            if self._shuffle:
+                self.rng.shuffle(self.keys)
+            with open(self.key_index_checkpoint_path, 'wb') as f:
+                pickle.dump(self.start_key, f)
+            with open(self.shuffled_keys_checkpoint_path, 'wb') as f:
+                pickle.dump(self.keys, f)
+
+    def store_checkpoint(self):
+        with open(self.key_index_checkpoint_path, 'wb') as f:
+            pickle.dump(self.current_key_idx, f)
 
     def __iter__(self):
         with self._guard:
-            if self._shuffle:
-                self.rng.shuffle(self.keys)
-            for k in self.keys:
+            self.maybe_load_checkpoint()
+            for i, k in enumerate(self.keys[self.start_key:]):
+                self.current_key_idx = i
                 v = self._txn.get(k)
                 yield [k, v]
 
