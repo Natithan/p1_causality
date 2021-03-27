@@ -34,7 +34,8 @@ import torch.distributed as dist
 import pdb
 from time import gmtime
 from constants import MODEL_CKPT_DIR
-from util import rank_to_free_gpu
+from util import rank_to_device
+from torch.nn.parallel import DistributedDataParallel as DDP
 
 logging.basicConfig(
     format="%(asctime)s - %(levelname)s - %(name)s -   %(message)s",
@@ -44,7 +45,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 last_checkpoint_time = t()
-
+MASTER_RANK = 0
 
 def setup(rank, world_size):
     os.environ['MASTER_ADDR'] = 'localhost'
@@ -259,6 +260,7 @@ def main():
 
 
 def main_single_process(rank, args):
+    setup(rank,args.world_size)
     s = t()
     if args.debug:
         logger.setLevel(logging.DEBUG)
@@ -287,22 +289,11 @@ def main_single_process(rank, args):
         print('\n', file=f)
         print(config, file=f)
     bert_weight_name = json.load(open("config/" + "bert-base-uncased_weight_name.json", "r"))
-    if args.local_rank == -1 or args.no_cuda:
-        device = torch.device(
-            "cuda" if torch.cuda.is_available() and not args.no_cuda else "cpu"
-        )
-        n_gpu = torch.cuda.device_count()
-    else:
-        device = torch.device("cuda", rank_to_free_gpu(args.local_rank))
-        torch.cuda.set_device(device)
-        n_gpu = 1
-        # Initializes the distributed backend which will take care of sychronizing nodes/GPUs
-        torch.distributed.init_process_group(backend="nccl")
-    logger.info(
-        "device: {} n_gpu: {}, distributed training: {}, 16-bits training: {}".format(
-            device, n_gpu, bool(args.local_rank != -1), args.fp16
-        )
-    )
+
+    device = torch.device("cuda", rank_to_device(rank))
+    torch.cuda.set_device(device)
+    n_gpu = 1
+
     if args.gradient_accumulation_steps < 1:
         raise ValueError(
             "Invalid gradient_accumulation_steps parameter: {}, should be >= 1".format(
@@ -320,14 +311,12 @@ def main_single_process(rank, args):
     tokenizer = BertTokenizer.from_pretrained(
         args.bert_model, do_lower_case=args.do_lower_case
     )
-    distributed = (args.local_rank != -1)
     train_dataset = ConceptCapLoaderTrain(
         tokenizer,
         seq_len=args.max_seq_length,
         batch_size=args.train_batch_size,
         predict_feature=args.predict_feature,
         num_workers=args.num_workers,
-        distributed=distributed,
         savePath=savePath,
         mini=args.mini
     )
@@ -348,18 +337,10 @@ def main_single_process(rank, args):
             )
             * args.num_train_epochs
     )
-    # if args.local_rank != -1:
-    #     num_train_optimization_steps = (
-    #         num_train_optimization_steps // torch.distributed.get_world_size()
-    #     )
+
     viz = TBlogger(Path(args.output_dir, "logs"), timeStamp)
-    default_gpu = False
-    if dist.is_available() and args.distributed:
-        rank = dist.get_rank()
-        if rank == 0:
-            default_gpu = True
-    else:
-        default_gpu = True
+
+    default_gpu = rank == 0
     # pdb.set_trace()
     if args.predict_feature:
         config.v_target_size = 2048
@@ -374,8 +355,7 @@ def main_single_process(rank, args):
             #                               "pytorch_model_{}.bin".format(int(args.start_epoch) - 1))
             # model = BertForMultiModalPreTraining.from_pretrained(ckpt_load_path, config)
             print(f"Loading model from checkpoint {ckpt_load_path}")
-            model = BertForMultiModalPreTraining(config)
-            load_state_dict_mapped(ckpt_load_path, device, model)
+            model = torch.load(ckpt_load_path,map_location={f'cuda:{rank_to_device(MASTER_RANK)}': str(device)})
 
             # Load correct epoch
             epoch_file = get_epoch_file_path(savePath)
@@ -386,25 +366,14 @@ def main_single_process(rank, args):
                 print(f"Loading start epoch from {epoch_file}")
 
         else:
-            model = BertForMultiModalPreTraining.from_pretrained(args.from_pretrained, config)
+            model = DDP(BertForMultiModalPreTraining.from_pretrained(args.from_pretrained, config).to(device), device_ids=[device])
     else:
-        model = BertForMultiModalPreTraining(config)
-    if args.local_rank != -1:
-        model.to(device)
-    else:
-        model.cuda()
+        model = DDP(BertForMultiModalPreTraining(config).to(device), device_ids=[device])
+
     if args.fp16:
         model.half()
-    if args.local_rank != -1:
-        try:
-            from apex.parallel import DistributedDataParallel as DDP
-        except ImportError:
-            raise ImportError(
-                "Please install apex from https://www.github.com/nvidia/apex to use distributed and fp16 training."
-            )
-        model = DDP(model)
+
     # elif n_gpu > 1:
-    # model = torch.nn.DataParallel(model) Nathan skipping parallelization step for now
     no_decay = ["bias", "LayerNorm.bias", "LayerNorm.weight"]
     if args.freeze != -1:
         bert_weight_name_filtered = []
@@ -512,18 +481,16 @@ def main_single_process(rank, args):
     # random.seed(torch.distributed.get_rank() * 2000)
     for epochId in range(int(args.start_epoch), int(args.num_train_epochs)):
 
-        # Store epoch idx
-
+        ## Store epoch idx
         # delete the old file
         old_path = get_epoch_file_path(savePath)
         if old_path is not None:
             os.remove(old_path)
-
         # store new file
         epoch_file = Path(savePath, f'start_epoch_{epochId}.json')
         with open(epoch_file, 'w') as f:
             json.dump(epochId, f)
-            print(f"Storing epochs-done ({epochId}) in {epoch_file}")
+            print(f"Storing done epochs in {epoch_file}")
 
         # Getting progress bar iterator for main process
         basic_iterator = enumerate(train_dataset, 1)
@@ -542,7 +509,7 @@ def main_single_process(rank, args):
                 logger.debug(f"Loading non-first batch took {s - t()} seconds")
             s = t()
             training_step(args, batch, default_gpu, device,
-                          distributed, epochId, model, optimizer, rank, savePath,
+                          epochId, model, optimizer, rank, savePath,
                           step, train_dataset, viz)
             logger.debug(f"Entire train step took {s - t()} seconds")
             s = t()
@@ -642,16 +609,15 @@ def main_single_process(rank, args):
             #     savePath, "optimizer_state_" + str(epochId) + ".bin"
             # torch.save(optimizer.state_dict(), output_opt_state_dict_file)
             # )
+    cleanup()
 
-
-def training_step(args, batch, default_gpu, device, distributed,
-                  epochId, model, optimizer, rank, savePath, step, train_dataset, viz):
+def training_step(args, batch, default_gpu, device, epochId, model, optimizer, rank, savePath, step, train_dataset, viz):
     batch = tuple(t.cuda(device=device, non_blocking=True) for t in batch)
     input_ids, input_mask, segment_ids, lm_label_ids, is_next, image_feat, image_loc, image_target, image_label, image_mask, \
     image_ids, causal_label_t, causal_label_v = (
         batch
     )
-    t = t()
+    s = t()
     masked_loss_t, masked_loss_v, next_sentence_loss, \
     causal_prediction_v_loss, causal_prediction_t_loss, \
     causal_prediction_v2t_loss, causal_prediction_t2v_loss = model(
@@ -668,18 +634,18 @@ def training_step(args, batch, default_gpu, device, distributed,
         causal_label_t,
         causal_label_v
     )
-    logger.debug(f'Model input --> model output losses took {t - t()}')
+    logger.debug(f'Model input --> model output losses took {s - t()}')
 
     masked_loss_v = masked_loss_v * args.img_weight
     loss = masked_loss_t + masked_loss_v + next_sentence_loss + \
            causal_prediction_v_loss + causal_prediction_t_loss + \
            causal_prediction_v2t_loss + causal_prediction_t2v_loss
-    t = t()
+    s = t()
     if args.fp16:
         optimizer.backward(loss)
     else:
         loss.backward()
-    logger.debug(f'Model input --> model output losses took {t - t()}')
+    logger.debug(f'Model input --> model output losses took {s - t()}')
     if math.isnan(loss.item()):
         pdb.set_trace()
     if default_gpu:
@@ -713,7 +679,7 @@ def training_step(args, batch, default_gpu, device, distributed,
     global last_checkpoint_time
     if t() - last_checkpoint_time > args.checkpoint_period:
         last_checkpoint_time = t()
-        checkpoint(savePath, distributed, model, optimizer, rank, device, train_dataset)
+        checkpoint(savePath, model, optimizer, rank, device, train_dataset)
 
 
 def get_epoch_file_path(savePath):
@@ -724,27 +690,19 @@ def get_epoch_file_path(savePath):
     return epoch_file
 
 
-def load_state_dict_mapped(ckpt_load_path, device, object):
-    dev_idx = device.index if device.index is not None else 0
-    # configure map_location properly
-    map_location = {'cuda:%d' % 0: 'cuda:%d' % dev_idx} #TODO fix mismatch between module.bert. ... and bert. ...
-    object.load_state_dict(
-        torch.load(ckpt_load_path, map_location=map_location))
-
-
-def checkpoint(savePath, distributed, model, optimizer, rank, device, train_dataset):
+def checkpoint(savePath, model, optimizer, rank, device, train_dataset):
     # Store model parameters (and load it in models on other devices)
     if rank == 0:
         # All processes should see same parameters as they all start from same
         # random parameters and gradients are synchronized in backward passes.
         # Therefore, saving it in one process is sufficient.
         print(f"\r\nStoring model and optimizer checkpoint in {savePath}")
-        for obj, path in zip([model, optimizer],
+        for obj, path in zip([model, optimizer.state_dict()],
                              [Path(savePath, f'{i}.checkpoint') for i in ['model', 'optimizer_state']]):
             old_ckpt_path_name = str(path) + '_old'
             if os.path.exists(path):
                 os.rename(path, old_ckpt_path_name)
-            torch.save(obj.state_dict(), path)
+            torch.save(obj, path)
         for obj, path in zip([model, optimizer],
                              [Path(savePath, f'{i}.checkpoint') for i in ['model', 'optimizer_state']]):
             old_ckpt_path_name = str(path) + '_old'
@@ -757,10 +715,18 @@ def checkpoint(savePath, distributed, model, optimizer, rank, device, train_data
 
     # Use a barrier() to make sure that process 1 loads the model after process
     # 0 saves it.
-    if distributed:
-        dist.barrier()
-    for obj, path in zip([model, optimizer], [Path(savePath, f'{i}.checkpoint') for i in ['model', 'optimizer_state']]):
-        load_state_dict_mapped(path.as_posix(), device, obj)
+    dist.barrier()
+
+    # Store and reload over processes: model and optimizer state
+    map_location = {f'cuda:{rank_to_device(MASTER_RANK)}': str(device)}
+    model.load_state_dict(
+        torch.load(Path(savePath, f'model.checkpoint'),
+                       map_location=map_location).state_dict()
+    )
+    optimizer.load_state_dict(
+        torch.load(Path(savePath, f'optimizer_state.checkpoint'),
+                   map_location=map_location))
+
 
 
 # def safely_store(checkpoint_path, object):

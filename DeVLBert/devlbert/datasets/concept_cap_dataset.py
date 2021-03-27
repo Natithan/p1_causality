@@ -123,7 +123,7 @@ class ConceptCapLoaderTrain(object):
             cache=50000,
             drop_last=False,
             cuda=False,
-            distributed=False,
+            distributed=True,
             visualization=False,
             savePath=None,
             mini=False

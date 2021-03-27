@@ -306,7 +306,6 @@ class MyLMDBData(LMDBData):
         if p is not None:
             print(f"Loading key indexes from existing files {p}")
             self.load_idxs_with_value_in_name_path()
-            print(f"Starting at indexes {[sk for sk in self.start_keys]} out of {[len(ks) for ks in self.keys_list]}")
         else:
             print('\r\nNo key index found: starting from scratch')
             self.start_keys = [0]*len(self._lmdbs)
