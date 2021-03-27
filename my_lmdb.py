@@ -54,14 +54,17 @@ from pathlib import Path
 import lmdb
 import os
 import platform
-
-from tensorpack.utils import logger
+import torch
+from typing import List
+from tensorpack.utils import logger, get_rng
 from tensorpack.utils.serialize import dumps, loads
 from tensorpack.utils.develop import create_dummy_class  # noqa
 from tensorpack.utils.utils import get_tqdm
-from tensorpack.dataflow.base import DataFlow
+from tensorpack.dataflow.base import DataFlow, DataFlowReentrantGuard
 from tensorpack.dataflow.common import MapData
 from tensorpack.dataflow.format import LMDBData
+from util import rank, world_size
+import glob
 
 __all__ = ['MyLMDBSerializer']
 
@@ -188,7 +191,7 @@ class MyLMDBSerializer:
         db.close()
 
     @staticmethod
-    def load(path, rank,nb_processes,shuffle=True,savePath=MODEL_CKPT_DIR):
+    def load(paths : List[str], shuffle=True,savePath=MODEL_CKPT_DIR):
         """
         Note:
             If you found deserialization being the bottleneck, you can use :class:`LMDBData` as the reader
@@ -196,7 +199,7 @@ class MyLMDBSerializer:
         """
         # df = LMDBData(path, shuffle=shuffle)
         # #TODO if I end up storing multiple LMDB databases, this interleaved loading is not necessary anymore
-        df = MyLMDBData(path, shuffle=shuffle, rank=rank, nb_processes=nb_processes,savePath=savePath)
+        df = MyLMDBData(paths, shuffle=shuffle,savePath=savePath)
         return MapData(df, MyLMDBSerializer._deserialize_lmdb)
 
     @staticmethod
@@ -205,58 +208,126 @@ class MyLMDBSerializer:
 
 
 class MyLMDBData(LMDBData):
-    def __init__(self, lmdb_path, shuffle=True, keys=None, rank=None, nb_processes=None, savePath=MODEL_CKPT_DIR):
-        self.rank = rank
-        self.nb_processes = nb_processes #TODO make this match with torch.distributed.get_world_size() and torch.distributed.get_rank()
+    def __init__(self, lmdb_paths : List[str], shuffle=True, keys=None, savePath=MODEL_CKPT_DIR):
+        self.rank = rank()
+        self.nb_processes = world_size()
         self.savePath = savePath
-        self.key_index_checkpoint_path = Path(self.savePath, f"key_index_{self.rank}_of_{NB_SAVED_SPLITS}.pickle")
-        self.shuffled_keys_checkpoint_path = Path(self.savePath, f"shuffled_keys_{self.rank}_of_{NB_SAVED_SPLITS}.pickle")
-        super().__init__(lmdb_path, shuffle, keys)
+
+        # Data is stored in multiple LMDB files. # of processes doesn't necessarily match number of LMDB files:
+        # might have multiple LMDB files per process, or multiple processes per LMDB file
+        self.key_indexes_checkpoint_path = Path(self.savePath, f"key_index_{self.rank}_of_{self.nb_processes}.pickle")
+        self.shuffled_keys_list_checkpoint_path = Path(self.savePath, f"shuffled_keys_{self.rank}_of_{self.nb_processes}.pickle")
+        self._lmdb_paths = lmdb_paths
+        self._shuffle = shuffle
+
+        self._open_lmdbs()
+        self._sizes = [txn.stat()['entries'] for txn in self._txns]
+        self.rng = get_rng(self)
+        self._set_keys(keys)
+        logger.info("Found {} entries in {}".format([s for s in self._sizes], [p for p in self._lmdb_paths]))
+        self.current_key_idx_list = [0]*len(self._lmdbs)
+        self.maybe_load_checkpoint()
+
+        # Clean them up after finding the list of keys, since we don't want to fork them
+        self._close_lmdbs()
+
+    def _open_lmdbs(self):
+        self._lmdbs = [lmdb.open(p,
+                               subdir=os.path.isdir(p),
+                               readonly=True, lock=False, readahead=True,
+                               map_size=1099511627776 * 2, max_readers=100)
+                       for p in self._lmdb_paths
+                       ]
+        self._txns = [env.begin() for env in self._lmdbs]
+
+    def _close_lmdbs(self):
+        for env in self._lmdbs:
+            env.close()
+        del self._lmdbs
+        del self._txns
+
 
     def _set_keys(self, keys=None):
-        all_keys = loads(self._txn.get(b'__keys__'))
+        if Path.exists(self.shuffled_keys_list_checkpoint_path):
+            print(f"Loading keys_list from existing file {self.shuffled_keys_list_checkpoint_path}")
+            with open(self.shuffled_keys_list_checkpoint_path, 'rb') as f:
+                self.keys_list = pickle.load(f)
+        else:
+            print(f'\r\nNo keys found, shuffling and storing at {self.shuffled_keys_list_checkpoint_path}')
+            all_keys_list = [loads(txn.get(b'__keys__')) for txn in self._txns]
+            self.keys_list = [akeys[self.rank::self.nb_processes] for akeys in all_keys_list]
+            if self._shuffle:
+                [self.rng.shuffle(ks) for ks in self.keys_list] # Modifies in-place
+            with open(self.shuffled_keys_list_checkpoint_path, 'wb') as f:
+                pickle.dump(self.keys_list, f)
+        # self.keys = all_keys[self.rank::self.nb_processes]# Changed to having different lmdb files.
+        # self.keys_list = all_keys
 
-        # self.keys = all_keys[self.rank::self.nb_processes]# Changed to having different lmdb files.  TODO maybe this is still useful if loading with more processes than # lmdb files?
-        self.keys = all_keys
+    def reset_state(self):
+        self._guard = DataFlowReentrantGuard()
+        self.rng = get_rng(self)
+        self._open_lmdbs()  # open the LMDB in the worker process
+
 
     def reset_index(self):
         self.reset_state()
 
         # Reset index in keys (no need to restore keys themselves)
-        self.start_key = 0
-        with open(self.key_index_checkpoint_path, 'wb') as f:
-            pickle.dump(self.start_key, f)
+        self.start_keys = [0]*len(self._lmdbs)
+        self.current_key_idx_list = [0]*len(self._lmdbs)
+        self.dump_idxs_with_value_in_name(self.start_keys)
+
+    def dump_idxs_with_value_in_name(self, keys):
+        # Remove previous checkpoint
+        old_path = self.get_existing_idxs_with_value_in_name_path()
+        if old_path is not None:
+            os.remove(old_path)
+        new_path = self.key_indexes_checkpoint_path.as_posix()[:-(len('.pickle'))] + f'_{str(keys)}.pickle'
+        with open(new_path, 'wb') as f:
+            pickle.dump(keys, f)
+
+    def load_idxs_with_value_in_name_path(self):
+        path = self.get_existing_idxs_with_value_in_name_path()
+        assert path is not None
+        with open(path, 'rb') as f:
+            self.start_keys = pickle.load(f)
+
+        print(f"Starting at indexes {[sk for sk in self.start_keys]} out of {[len(ks) for ks in self.keys_list]}")
+
+    def get_existing_idxs_with_value_in_name_path(self):
+        search_regex = self.key_indexes_checkpoint_path.as_posix()[:-(len('.pickle'))] + f'_*.pickle'
+        res = glob.glob(search_regex)
+        assert (len(res) <= 1)
+        new_path = res[0] if len(res) != 0 else None
+        return new_path
 
     def maybe_load_checkpoint(self):
-        assert Path.exists(self.key_index_checkpoint_path) == Path.exists(self.shuffled_keys_checkpoint_path)
-        if Path.exists(self.key_index_checkpoint_path):
-            print(f"Loading keys and key index from existing file {self.key_index_checkpoint_path}")
-            with open(self.key_index_checkpoint_path, 'rb') as f:
-                self.start_key = pickle.load(f)
-            with open(self.shuffled_keys_checkpoint_path, 'rb') as f:
-                self.keys = pickle.load(f)
-            print(f"Starting at index {self.start_key} out of {len(self.keys)}")
+        p = self.get_existing_idxs_with_value_in_name_path()
+        if p is not None:
+            print(f"Loading key indexes from existing files {p}")
+            self.load_idxs_with_value_in_name_path()
+            print(f"Starting at indexes {[sk for sk in self.start_keys]} out of {[len(ks) for ks in self.keys_list]}")
         else:
-            print('No keys and key index found: starting from scratch')
-            self.start_key = 0
-            if self._shuffle:
-                self.rng.shuffle(self.keys)
-            with open(self.key_index_checkpoint_path, 'wb') as f:
-                pickle.dump(self.start_key, f)
-            with open(self.shuffled_keys_checkpoint_path, 'wb') as f:
-                pickle.dump(self.keys, f)
+            print('\r\nNo key index found: starting from scratch')
+            self.start_keys = [0]*len(self._lmdbs)
+            self.dump_idxs_with_value_in_name(self.start_keys)
 
     def store_checkpoint(self):
-        with open(self.key_index_checkpoint_path, 'wb') as f:
-            pickle.dump(self.current_key_idx, f)
+        self.dump_idxs_with_value_in_name(self.current_key_idx_list)
 
     def __iter__(self):
         with self._guard:
-            self.maybe_load_checkpoint()
-            for i, k in enumerate(self.keys[self.start_key:]):
-                self.current_key_idx = i
-                v = self._txn.get(k)
-                yield [k, v]
+            for j, (txn, keys, start_key) in enumerate(zip(self._txns, self.keys_list, self.start_keys)):
+                for i, k in enumerate(keys[start_key:]):
+                    if self.mini:
+                        if start_key + i > 100:
+                            break
+                    self.current_key_idx_list[j] = start_key + i
+                    v = txn.get(k)
+                    yield [k, v]
 
     def __len__(self):
-        return len(self.keys)
+        return sum(len(ks) for ks in self.keys_list)
+
+    def set_mini(self, mini):
+        self.mini = mini

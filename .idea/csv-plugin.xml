@@ -234,6 +234,13 @@
             </Attribute>
           </value>
         </entry>
+        <entry key="\my_lmdb.py">
+          <value>
+            <Attribute>
+              <option name="separator" value="," />
+            </Attribute>
+          </value>
+        </entry>
         <entry key="\preprocess.py">
           <value>
             <Attribute>

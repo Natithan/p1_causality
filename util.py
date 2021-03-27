@@ -11,7 +11,7 @@ import random
 import numpy as np
 import re
 from torch import distributed as dist
-
+import torch
 from tools.DownloadConcptualCaption.download_data import _file_name
 
 with open("/cw/liir/NoCsBack/testliir/nathan/p1_causality/DeVLBert/dic/objects_vocab.txt", "r") as vocab:
@@ -84,3 +84,10 @@ def world_size() -> int:
     if not dist.is_initialized():
         return 1
     return dist.get_world_size()
+
+def rank() -> int:
+    if not dist.is_available():
+        return 0
+    if not dist.is_initialized():
+        return 0
+    return torch.distributed.get_rank()

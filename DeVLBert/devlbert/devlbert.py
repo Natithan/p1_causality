@@ -1597,8 +1597,8 @@ class BertForMultiModalPreTraining(BertPreTrainedModel):
         self.causal_t = Causal_t()
         self.causal_t2v = Causal_t2v()
         self.causal_v2t = Causal_v2t()
-
-        print("model's option for predict_feature is ", config.predict_feature)
+        #
+        # print("model's option for predict_feature is ", config.predict_feature)
 
         if self.predict_feature:
             self.vis_criterion = nn.MSELoss(reduction="none")

@@ -7,7 +7,8 @@
 #--mini --checkpoint_period 100 -- continue_training
 
 # Without linebreaks for easy copying
-python -m torch.distributed.launch --nproc_per_node=4 --nnodes=1 --node_rank=0 train_concap.py --mini --checkpoint_period 100 --continue_training --from_pretrained bert-base-uncased --bert_model bert-base-uncased --config_file config/bert_base_6layer_6conect.json --learning_rate 1e-4 --train_batch_size 64 --save_name devlbert_base --distributed
+#python -m torch.distributed.launch --nproc_per_node=4 --nnodes=1 --node_rank=0 train_concap.py --mini --checkpoint_period 100 --continue_training --from_pretrained bert-base-uncased --bert_model bert-base-uncased --config_file config/bert_base_6layer_6conect.json --learning_rate 1e-4 --train_batch_size 64 --save_name devlbert_base_full --distributed
+python -m torch.distributed.launch --nproc_per_node=2 --nnodes=1 --node_rank=0 train_concap.py --mini --checkpoint_period 100 --continue_training --from_pretrained bert-base-uncased --bert_model bert-base-uncased --config_file config/bert_base_6layer_6conect.json --learning_rate 1e-4 --train_batch_size 64 --save_name devlbert_base_mini --distributed
 
 # second step
 # change region mask probability from 0.15 to 0.3

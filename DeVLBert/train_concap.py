@@ -1,4 +1,8 @@
+from time import time as t
+import glob
+
 import warnings
+
 warnings.simplefilter(action='ignore', category=FutureWarning)
 warnings.simplefilter(action='ignore', category=UserWarning)
 import argparse
@@ -10,10 +14,11 @@ from io import open
 import math
 import sys
 from time import strftime
-from time import time
 from datetime import datetime
 from pathlib import Path
-START = time()
+
+import torch.multiprocessing as mp
+START = t()
 from timeit import default_timer as timer
 import numpy as np
 from tqdm import tqdm, trange
@@ -30,12 +35,15 @@ import pdb
 from time import gmtime
 from constants import MODEL_CKPT_DIR
 from util import rank_to_free_gpu
+
 logging.basicConfig(
     format="%(asctime)s - %(levelname)s - %(name)s -   %(message)s",
     datefmt="%m/%d/%Y %H:%M:%S",
     level=logging.INFO,
 )
 logger = logging.getLogger(__name__)
+
+last_checkpoint_time = t()
 
 
 def setup(rank, world_size):
@@ -53,7 +61,6 @@ def cleanup():
 def main():
     # region Parser stuff
     parser = argparse.ArgumentParser()
-
     # Required parameters
     parser.add_argument(
         "--train_file",
@@ -109,7 +116,6 @@ def main():
              "than this will be padded.",
     )
     parser.add_argument("--predict_feature", action="store_true", help="visual target.")
-
     parser.add_argument(
         "--train_batch_size",
         default=512,
@@ -192,7 +198,12 @@ def main():
         default=3,
         help="Number of workers in the dataloader.",
     )
-
+    parser.add_argument(
+        "--world_size",
+        type=int,
+        default=2,
+        help="Number of processes, should equal number of GPUs you intend to use.",
+    )
     parser.add_argument(
         "--save_name",
         default='',
@@ -234,37 +245,40 @@ def main():
         default=60 * 60,
         help="Number seconds between each time a checkpoint is stored",
     )
+    parser.add_argument(
+        "--debug", action="store_true", help="If true sets logging level to debug"
+    )
     args = parser.parse_args()
     # os.environ['CUDA_VISIBLE_DEVICES'] = ",".join([str(g) for g in args.gpus])
     # endregion
 
-    rank = args.local_rank if args.local_rank != -1 else 0
+    mp.spawn(main_single_process,
+             args=(args,),
+             nprocs=args.world_size,
+             join=True)
+
+
+def main_single_process(rank, args):
+    s = t()
+    if args.debug:
+        logger.setLevel(logging.DEBUG)
     if args.baseline:
         from pytorch_pretrained_bert.modeling import BertConfig
         from devlbert.basebert import BertForMultiModalPreTraining
     else:
         from devlbert.devlbert import BertForMultiModalPreTraining, BertConfig
-
-    print('\r\n'.join(f'{k}: {v}' for k, v in args.__dict__.items()))
+    logger.info('\r\n'.join(f'{k}: {v}' for k, v in args.__dict__.items()))
     if args.save_name is not '':
         timeStamp = args.save_name
     else:
         timeStamp = strftime("%d-%b-%y-%X-%a")
         timeStamp += "_{:0>6d}".format(random.randint(0, 10e6))
-
     savePath = os.path.join(args.output_dir, timeStamp)
-
-    try:
-        if not os.path.exists(savePath):
-            os.makedirs(savePath)
-    except Exception:
-        pass
-
+    if not os.path.exists(savePath):
+        os.makedirs(savePath)
     config = BertConfig.from_json_file(args.config_file)
-
     if args.freeze > config.t_biattention_id[0]:
         config.fixed_t_layer = config.t_biattention_id[0]
-
     if args.without_coattention:
         config.with_coattention = False
     # save all the hidden parameters.
@@ -272,7 +286,6 @@ def main():
         print(args, file=f)  # Python 3.x
         print('\n', file=f)
         print(config, file=f)
-
     bert_weight_name = json.load(open("config/" + "bert-base-uncased_weight_name.json", "r"))
     if args.local_rank == -1 or args.no_cuda:
         device = torch.device(
@@ -290,29 +303,23 @@ def main():
             device, n_gpu, bool(args.local_rank != -1), args.fp16
         )
     )
-
     if args.gradient_accumulation_steps < 1:
         raise ValueError(
             "Invalid gradient_accumulation_steps parameter: {}, should be >= 1".format(
                 args.gradient_accumulation_steps
             )
         )
-
     args.train_batch_size = args.train_batch_size // args.gradient_accumulation_steps
-
     random.seed(args.seed)
     np.random.seed(args.seed)
     torch.manual_seed(args.seed)
     if n_gpu > 0:
         torch.cuda.manual_seed_all(args.seed)
-
     if not os.path.exists(args.output_dir):
         os.makedirs(args.output_dir)
-
     tokenizer = BertTokenizer.from_pretrained(
         args.bert_model, do_lower_case=args.do_lower_case
     )
-
     distributed = (args.local_rank != -1)
     train_dataset = ConceptCapLoaderTrain(
         tokenizer,
@@ -321,9 +328,9 @@ def main():
         predict_feature=args.predict_feature,
         num_workers=args.num_workers,
         distributed=distributed,
-        savePath=savePath
+        savePath=savePath,
+        mini=args.mini
     )
-
     # validation_dataset = ConceptCapLoaderVal(
     #     args.validation_file,
     #     tokenizer,
@@ -333,7 +340,6 @@ def main():
     #     num_workers=2,
     #     distributed=args.distributed,
     # )
-
     num_train_optimization_steps = (
             int(
                 train_dataset.num_dataset
@@ -346,7 +352,7 @@ def main():
     #     num_train_optimization_steps = (
     #         num_train_optimization_steps // torch.distributed.get_world_size()
     #     )
-    viz = TBlogger(Path(args.output_dir,"logs"), timeStamp)
+    viz = TBlogger(Path(args.output_dir, "logs"), timeStamp)
     default_gpu = False
     if dist.is_available() and args.distributed:
         rank = dist.get_rank()
@@ -354,7 +360,6 @@ def main():
             default_gpu = True
     else:
         default_gpu = True
-
     # pdb.set_trace()
     if args.predict_feature:
         config.v_target_size = 2048
@@ -362,7 +367,6 @@ def main():
     else:
         config.v_target_size = 1601
         config.predict_feature = False
-
     if args.from_pretrained:
         ckpt_load_path = Path(savePath, f"model.checkpoint")
         if args.continue_training and Path(ckpt_load_path).exists():
@@ -373,16 +377,22 @@ def main():
             model = BertForMultiModalPreTraining(config)
             load_state_dict_mapped(ckpt_load_path, device, model)
 
+            # Load correct epoch
+            epoch_file = get_epoch_file_path(savePath)
+
+            if epoch_file is not None:
+                with open(epoch_file, 'r') as f:
+                    args.start_epoch = json.load(f)
+                print(f"Loading start epoch from {epoch_file}")
+
         else:
             model = BertForMultiModalPreTraining.from_pretrained(args.from_pretrained, config)
     else:
         model = BertForMultiModalPreTraining(config)
-
     if args.local_rank != -1:
         model.to(device)
     else:
         model.cuda()
-
     if args.fp16:
         model.half()
     if args.local_rank != -1:
@@ -395,9 +405,7 @@ def main():
         model = DDP(model)
     # elif n_gpu > 1:
     # model = torch.nn.DataParallel(model) Nathan skipping parallelization step for now
-
     no_decay = ["bias", "LayerNorm.bias", "LayerNorm.weight"]
-
     if args.freeze != -1:
         bert_weight_name_filtered = []
         for name in bert_weight_name:
@@ -416,7 +424,6 @@ def main():
         if default_gpu:
             print("filtered weight")
             print(bert_weight_name_filtered)
-
     if not args.from_pretrained:
         param_optimizer = list(model.named_parameters())
         optimizer_grouped_parameters = [
@@ -454,7 +461,6 @@ def main():
                     ]
         if default_gpu:
             print(len(list(model.named_parameters())), len(optimizer_grouped_parameters))
-
     # set different parameters for vision branch and lanugage branch.
     if args.fp16:
         try:
@@ -497,157 +503,49 @@ def main():
             if Path(opt_state_dict_path).exists():
                 print(f"Loading optimizer state dict from {opt_state_dict_path}")
                 optimizer.load_state_dict(torch.load(opt_state_dict_path, map_location='cpu'))
-
     logger.info("***** Running training *****")
     logger.info("  Num examples = %d", train_dataset.num_dataset)
     logger.info("  Batch size = %d", args.train_batch_size)
     logger.info("  Num steps = %d", num_train_optimization_steps)
-
     global_step = 0
-    t = time()
+    logger.debug(f'Getting to epoch loop took {t() - s} seconds')
     # random.seed(torch.distributed.get_rank() * 2000)
     for epochId in range(int(args.start_epoch), int(args.num_train_epochs)):
-        masked_loss_v_tmp, masked_loss_t_tmp, next_sentence_loss_tmp, loss_tmp, \
-        causal_prediction_loss_v_tmp, causal_prediction_loss_t_tmp, \
-        causal_prediction_t2v_loss_tmp, causal_prediction_v2t_loss_tmp = 0, 0, 0, 0, 0, 0, 0, 0
-        start_t = timer()
-        iterator = tqdm(enumerate(train_dataset, 1), total=len(train_dataset)) if default_gpu else enumerate(
-            train_dataset, 1)
+
+        # Store epoch idx
+
+        # delete the old file
+        old_path = get_epoch_file_path(savePath)
+        if old_path is not None:
+            os.remove(old_path)
+
+        # store new file
+        epoch_file = Path(savePath, f'start_epoch_{epochId}.json')
+        with open(epoch_file, 'w') as f:
+            json.dump(epochId, f)
+            print(f"Storing epochs-done ({epochId}) in {epoch_file}")
+
+        # Getting progress bar iterator for main process
+        basic_iterator = enumerate(train_dataset, 1)
+        iterator = tqdm(basic_iterator,
+                        total=len(train_dataset),
+                        initial=sum(train_dataset.get_core_ds().start_keys) // args.train_batch_size) \
+            if default_gpu else basic_iterator
+
+        s = t()
+        first = True
         for step, batch in iterator:
-            iterId = train_dataset.get_core_ds().current_key_idx // len(batch) + (epochId * len(train_dataset))
-            batch = tuple(t.cuda(device=device, non_blocking=True) for t in batch)
-            if args.mini:
-                if step > 10:
-                    break
-            input_ids, input_mask, segment_ids, lm_label_ids, is_next, image_feat, image_loc, image_target, image_label, image_mask, \
-            image_ids, causal_label_t, causal_label_v = (
-                batch
-            )
-            masked_loss_t, masked_loss_v, next_sentence_loss, \
-            causal_prediction_v_loss, causal_prediction_t_loss, \
-            causal_prediction_v2t_loss, causal_prediction_t2v_loss = model(
-                input_ids,
-                image_feat,
-                image_loc,
-                segment_ids,
-                input_mask,
-                image_mask,
-                lm_label_ids,
-                image_label,
-                image_target,
-                is_next,
-                causal_label_t,
-                causal_label_v
-            )
-            # if causal_prediction_t_loss is None:
-            #     causal_prediction_t_loss = 0 * sum(p.sum() for p in model.parameters())
-
-            # if args.without_coattention:
-            #     next_sentence_loss = next_sentence_loss * 0
-
-            # next_sentence_loss = next_sentence_loss * 20
-            masked_loss_v = masked_loss_v * args.img_weight
-            loss = masked_loss_t + masked_loss_v + next_sentence_loss + \
-                   causal_prediction_v_loss + causal_prediction_t_loss + \
-                   causal_prediction_v2t_loss + causal_prediction_t2v_loss
-
-            # if n_gpu > 1:
-            #     loss = loss.mean()  # mean() to average on multi-gpu.
-            #     masked_loss_t = masked_loss_t.mean()
-            #     masked_loss_v = masked_loss_v.mean()
-            #     next_sentence_loss = next_sentence_loss.mean()
-            #     causal_prediction_v_loss = causal_prediction_v_loss.mean()
-            #     causal_prediction_t_loss = causal_prediction_t_loss.mean()
-            #     causal_prediction_v2t_loss = causal_prediction_v2t_loss.mean()
-            #     causal_prediction_t2v_loss = causal_prediction_t2v_loss.mean()
-
-            # if args.gradient_accumulation_steps > 1:
-            #     loss = loss / args.gradient_accumulation_steps
-            if args.fp16:
-                optimizer.backward(loss)
+            first = False
+            if first:
+                logger.debug(f"Loading first batch took {s - t()} seconds")
             else:
-                loss.backward()
-
-            if math.isnan(loss.item()):
-                pdb.set_trace()
-
-            if default_gpu:
-                viz.linePlot(iterId, loss.item(), "loss", "train")
-                viz.linePlot(iterId, masked_loss_t.item(), "masked_loss_t", "train")
-                viz.linePlot(iterId, masked_loss_v.item(), "masked_loss_v", "train")
-                viz.linePlot(iterId, next_sentence_loss.item(), "next_sentence_loss", "train")
-                viz.linePlot(iterId, causal_prediction_v_loss.item(), "causal_prediction_v_loss", "train")
-                viz.linePlot(iterId, causal_prediction_t_loss.item(), "causal_prediction_t_loss", "train")
-                viz.linePlot(iterId, causal_prediction_v2t_loss.item(), "causal_prediction_v2t_loss", "train")
-                viz.linePlot(iterId, causal_prediction_t2v_loss.item(), "causal_prediction_t2v_loss", "train")
-            # viz.linePlot(iterId, optimizer.get_lr()[0], 'learning_rate', 'train')
-
-            loss_tmp += loss.item()
-            masked_loss_v_tmp += masked_loss_v.item()
-            masked_loss_t_tmp += masked_loss_t.item()
-            next_sentence_loss_tmp += next_sentence_loss.item()
-            causal_prediction_loss_v_tmp += causal_prediction_v_loss.item()
-            causal_prediction_loss_t_tmp += causal_prediction_t_loss.item()
-            causal_prediction_v2t_loss_tmp += causal_prediction_v2t_loss.item()
-            causal_prediction_t2v_loss_tmp += causal_prediction_t2v_loss.item()
-
-            if step % args.gradient_accumulation_steps == 0:
-                if args.fp16:
-                    # modify learning rate with special warm up BERT uses
-                    # if args.fp16 is False, BertAdam is used that handles this automatically
-                    lr_this_step = args.learning_rate * warmup_linear(
-                        global_step / num_train_optimization_steps,
-                        args.warmup_proportion,
-                    )
-                    for param_group in optimizer.param_groups:
-                        param_group["lr"] = lr_this_step
-
-                optimizer.step()
-                optimizer.zero_grad()
-                global_step += 1
-
-            if step % 20 == 0:
-                masked_loss_t_tmp = masked_loss_t_tmp / 20.0
-                masked_loss_v_tmp = masked_loss_v_tmp / 20.0
-                next_sentence_loss_tmp = next_sentence_loss_tmp / 20.0
-                loss_tmp = loss_tmp / 20.0
-                causal_prediction_loss_v_tmp = causal_prediction_loss_v_tmp / 20.0
-                causal_prediction_loss_t_tmp = causal_prediction_loss_t_tmp / 20.0
-                causal_prediction_v2t_loss_tmp = causal_prediction_v2t_loss_tmp / 20.0
-                causal_prediction_t2v_loss_tmp = causal_prediction_t2v_loss_tmp / 20.0
-
-                end_t = timer()
-                timeStamp = strftime("%d %b %X")
-
-                Ep = epochId + step / float(len(train_dataset))
-                # printFormat = "[%s][Ep: %.2f][Time: %5.2fs][Loss: %.5g][Loss_v: %.5g][Loss_t: %.5g][Loss_n: %.5g][Loss_cv: %.5g][Loss_ct: %.5g][LR: %.8g]"
-                printFormat = "[%s][Ep: %.2f][Time: %5.2fs][Loss: %.5g][Loss_v: %.5g][Loss_t: %.5g][Loss_n: %.5g][Loss_cv: %.5g][Loss_ct: %.5g][Loss_cv2t: %.5g][Loss_ct2v: %.5g]"
-                printInfo = [
-                    timeStamp,
-                    Ep,
-                    end_t - start_t,
-                    loss_tmp,
-                    masked_loss_v_tmp,
-                    masked_loss_t_tmp,
-                    next_sentence_loss_tmp,
-                    causal_prediction_loss_v_tmp,
-                    causal_prediction_loss_t_tmp,
-                    causal_prediction_v2t_loss_tmp,
-                    causal_prediction_t2v_loss_tmp
-                ]
-
-                start_t = end_t
-                print(printFormat % tuple(printInfo))
-
-                masked_loss_v_tmp, masked_loss_t_tmp, next_sentence_loss_tmp, loss_tmp, \
-                causal_prediction_loss_v_tmp, causal_prediction_loss_t_tmp, \
-                causal_prediction_t2v_loss_tmp, causal_prediction_v2t_loss_tmp = 0, 0, 0, 0, 0, 0, 0, 0
-
-            # Checkpointing
-            if time() - t > args.checkpoint_period:
-                t = time()
-                checkpoint(Path(savePath, f"model.checkpoint"), savePath, distributed, model, optimizer, rank, device, train_dataset)
-
+                logger.debug(f"Loading non-first batch took {s - t()} seconds")
+            s = t()
+            training_step(args, batch, default_gpu, device,
+                          distributed, epochId, model, optimizer, rank, savePath,
+                          step, train_dataset, viz)
+            logger.debug(f"Entire train step took {s - t()} seconds")
+            s = t()
         # Do the evaluation
         # torch.set_grad_enabled(False)
         # start_t = timer()
@@ -742,50 +640,147 @@ def main():
             torch.save(model_to_save.state_dict(), output_model_file)
             # output_opt_state_dict_file = os.path.join(
             #     savePath, "optimizer_state_" + str(epochId) + ".bin"
-            # )
             # torch.save(optimizer.state_dict(), output_opt_state_dict_file)
+            # )
 
 
-def load_state_dict_mapped(ckpt_load_path, device, model):
+def training_step(args, batch, default_gpu, device, distributed,
+                  epochId, model, optimizer, rank, savePath, step, train_dataset, viz):
+    batch = tuple(t.cuda(device=device, non_blocking=True) for t in batch)
+    input_ids, input_mask, segment_ids, lm_label_ids, is_next, image_feat, image_loc, image_target, image_label, image_mask, \
+    image_ids, causal_label_t, causal_label_v = (
+        batch
+    )
+    t = t()
+    masked_loss_t, masked_loss_v, next_sentence_loss, \
+    causal_prediction_v_loss, causal_prediction_t_loss, \
+    causal_prediction_v2t_loss, causal_prediction_t2v_loss = model(
+        input_ids,
+        image_feat,
+        image_loc,
+        segment_ids,
+        input_mask,
+        image_mask,
+        lm_label_ids,
+        image_label,
+        image_target,
+        is_next,
+        causal_label_t,
+        causal_label_v
+    )
+    logger.debug(f'Model input --> model output losses took {t - t()}')
+
+    masked_loss_v = masked_loss_v * args.img_weight
+    loss = masked_loss_t + masked_loss_v + next_sentence_loss + \
+           causal_prediction_v_loss + causal_prediction_t_loss + \
+           causal_prediction_v2t_loss + causal_prediction_t2v_loss
+    t = t()
+    if args.fp16:
+        optimizer.backward(loss)
+    else:
+        loss.backward()
+    logger.debug(f'Model input --> model output losses took {t - t()}')
+    if math.isnan(loss.item()):
+        pdb.set_trace()
+    if default_gpu:
+        iterId = (sum(train_dataset.get_core_ds().current_key_idx_list) // len(batch)) + (epochId * len(train_dataset))
+        viz.linePlot(iterId, loss.item(), "loss", "train")
+        viz.linePlot(iterId, masked_loss_t.item(), "masked_loss_t", "train")
+        viz.linePlot(iterId, masked_loss_v.item(), "masked_loss_v", "train")
+        viz.linePlot(iterId, next_sentence_loss.item(), "next_sentence_loss", "train")
+        viz.linePlot(iterId, causal_prediction_v_loss.item(), "causal_prediction_v_loss", "train")
+        viz.linePlot(iterId, causal_prediction_t_loss.item(), "causal_prediction_t_loss", "train")
+        viz.linePlot(iterId, causal_prediction_v2t_loss.item(), "causal_prediction_v2t_loss", "train")
+        viz.linePlot(iterId, causal_prediction_t2v_loss.item(), "causal_prediction_t2v_loss", "train")
+        viz.linePlot(iterId, optimizer.get_lr()[0], 'learning_rate', 'train')
+
+    if step % args.gradient_accumulation_steps == 0:
+        # if args.fp16: Nathan
+        #     # modify learning rate with special warm up BERT uses
+        #     # if args.fp16 is False, BertAdam is used that handles this automatically
+        #     lr_this_step = args.learning_rate * warmup_linear(
+        #         global_step / num_train_optimization_steps,
+        #         args.warmup_proportion,
+        #     )
+        #     for param_group in optimizer.param_groups:
+        #         param_group["lr"] = lr_this_step
+
+        optimizer.step()
+        optimizer.zero_grad()
+        # global_step += 1 #Nathan
+
+    # Checkpointing
+    global last_checkpoint_time
+    if t() - last_checkpoint_time > args.checkpoint_period:
+        last_checkpoint_time = t()
+        checkpoint(savePath, distributed, model, optimizer, rank, device, train_dataset)
+
+
+def get_epoch_file_path(savePath):
+    search_regex = Path(savePath, f'start_epoch_*.json').as_posix()
+    res = glob.glob(search_regex)
+    assert (len(res) <= 1)
+    epoch_file = res[0] if len(res) != 0 else None
+    return epoch_file
+
+
+def load_state_dict_mapped(ckpt_load_path, device, object):
     dev_idx = device.index if device.index is not None else 0
     # configure map_location properly
-    map_location = {'cuda:%d' % 0: 'cuda:%d' % dev_idx}
-    model.load_state_dict(
+    map_location = {'cuda:%d' % 0: 'cuda:%d' % dev_idx} #TODO fix mismatch between module.bert. ... and bert. ...
+    object.load_state_dict(
         torch.load(ckpt_load_path, map_location=map_location))
 
-def checkpoint(CHECKPOINT_PATH, savePath, distributed, model, optimizer, rank, device, train_dataset):
-    # Store where we are in the data
-    train_dataset.store_checkpoint()
+
+def checkpoint(savePath, distributed, model, optimizer, rank, device, train_dataset):
     # Store model parameters (and load it in models on other devices)
     if rank == 0:
         # All processes should see same parameters as they all start from same
         # random parameters and gradients are synchronized in backward passes.
         # Therefore, saving it in one process is sufficient.
-        print(f"\r\nStoring model checkpoint at {CHECKPOINT_PATH}")
-        torch.save(model.state_dict(), CHECKPOINT_PATH)
-        print(f"\r\nDone storing model checkpoint.")
+        print(f"\r\nStoring model and optimizer checkpoint in {savePath}")
+        for obj, path in zip([model, optimizer],
+                             [Path(savePath, f'{i}.checkpoint') for i in ['model', 'optimizer_state']]):
+            old_ckpt_path_name = str(path) + '_old'
+            if os.path.exists(path):
+                os.rename(path, old_ckpt_path_name)
+            torch.save(obj.state_dict(), path)
+        for obj, path in zip([model, optimizer],
+                             [Path(savePath, f'{i}.checkpoint') for i in ['model', 'optimizer_state']]):
+            old_ckpt_path_name = str(path) + '_old'
+            if os.path.exists(old_ckpt_path_name):
+                os.remove(old_ckpt_path_name)
+        print(f"\r\nDone storing model and optimizer checkpoint.")
+
+    # Store where we are in the data
+    train_dataset.store_checkpoint()
+
     # Use a barrier() to make sure that process 1 loads the model after process
     # 0 saves it.
     if distributed:
         dist.barrier()
-    load_state_dict_mapped(CHECKPOINT_PATH,device,model)
+    for obj, path in zip([model, optimizer], [Path(savePath, f'{i}.checkpoint') for i in ['model', 'optimizer_state']]):
+        load_state_dict_mapped(path.as_posix(), device, obj)
 
-    # Store optimizer state
-    output_opt_state_dict_file = os.path.join(
-        savePath, f"optimizer_state.checkpoint"
-    )
-    torch.save(optimizer.state_dict(), output_opt_state_dict_file)
 
+# def safely_store(checkpoint_path, object):
+#     old_ckpt_path_name = str(checkpoint_path) + '_old'
+#     if os.path.exists(checkpoint_path):
+#         os.rename(checkpoint_path, old_ckpt_path_name)
+#     torch.save(object.state_dict(), checkpoint_path)
+#     if os.path.exists(old_ckpt_path_name):
+#         os.remove(str(checkpoint_path) + '_old')
 
 
 class TBlogger:
     def __init__(self, log_dir, exp_name):
-        log_dir = Path(log_dir,exp_name)
+        log_dir = Path(log_dir, exp_name)
         print(f"logging file at: {log_dir}")
         self.logger = SummaryWriter(log_dir=log_dir)
 
     def linePlot(self, step, val, split, key, xlabel="None"):
         self.logger.add_scalar(split + "/" + key, val, step)
+
 
 
 if __name__ == "__main__":

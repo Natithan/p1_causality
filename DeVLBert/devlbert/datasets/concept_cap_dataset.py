@@ -16,6 +16,8 @@ import torch.distributed as dist
 import sys
 import pdb
 from constants import ID2CLASS_PATH
+from typing import List
+
 REGION_LEN = 36
 logging.basicConfig(
     format="%(asctime)s - %(levelname)s - %(name)s -   %(message)s",
@@ -112,7 +114,7 @@ class ConceptCapLoaderTrain(object):
             tokenizer,
             seq_len,
             encoding="utf-8",
-            lmdb_path=None,
+            lmdb_paths: List = None,
             predict_feature=False,
             hard_negative=False,
             batch_size=512,
@@ -123,31 +125,32 @@ class ConceptCapLoaderTrain(object):
             cuda=False,
             distributed=False,
             visualization=False,
-            savePath=None
+            savePath=None,
+            mini=False
     ):
-        if lmdb_path:
-            lmdb_file = lmdb_path
+        if lmdb_paths:
+            lmdb_files = lmdb_paths
         else:
-            if dist.is_available() and distributed:
-                num_replicas = dist.get_world_size()
-                # assert num_replicas == 8
-                rank = dist.get_rank()
-                # if not os.path.exists(lmdb_file):
-                # lmdb_file = "/srv/share/datasets/conceptual_caption/training_feat_part_" + str(rank) + ".lmdb"
-            else:
-                # lmdb_file = "/coc/dataset/conceptual_caption/training_feat_all.lmdb"
-                # if not os.path.exists(lmdb_file):
-                num_replicas = 1
-                rank = 0
-                print(f"WARNING: only loading from {LMDB_PATHS[rank]}")
-                # lmdb_file = "/mnt3/xuesheng/features_lmdb/CC/training_feat_part_0.lmdb" #Nathan
-            lmdb_file = LMDB_PATHS[rank]
+            # if dist.is_available() and distributed:
+            #     num_replicas = dist.get_world_size()
+            #     # assert num_replicas == 8
+            #     rank = dist.get_rank()
+            #     # if not os.path.exists(lmdb_file):
+            #     # lmdb_file = "/srv/share/datasets/conceptual_caption/training_feat_part_" + str(rank) + ".lmdb"
+            # else:
+            #     # lmdb_file = "/coc/dataset/conceptual_caption/training_feat_all.lmdb"
+            #     # if not os.path.exists(lmdb_file):
+            #     num_replicas = 1
+            #     rank = 0
+            #     print(f"WARNING: only loading from {LMDB_PATHS[rank]}")
+            #     # lmdb_file = "/mnt3/xuesheng/features_lmdb/CC/training_feat_part_0.lmdb" #Nathan
+            lmdb_files = LMDB_PATHS
 
         caption_path = CAPTION_PATH
         # caption_path = "/mnt3/xuesheng/features_lmdb/CC/caption_train.json"
-        print("Loading from %s" % lmdb_file)
+        print(f"Loading from{lmdb_files}")
 
-        ds = MyLMDBSerializer.load(lmdb_file,rank,num_replicas, shuffle=True,savePath=savePath)
+        ds = MyLMDBSerializer.load(lmdb_files, shuffle=True, savePath=savePath)
         self.num_dataset = len(ds)
 
         preprocess_function = BertPreprocessBatch(
@@ -171,6 +174,8 @@ class ConceptCapLoaderTrain(object):
 
         self.batch_size = batch_size
         self.num_workers = num_workers
+        core = self.get_core_ds()
+        core.set_mini(mini)
 
     # Nathan
     def store_checkpoint(self):
@@ -191,7 +196,8 @@ class ConceptCapLoaderTrain(object):
             image_loc, image_target, image_label, image_mask, image_id, causal_label_t, causal_label_v = batch
 
             batch_size = input_ids.shape[0]
-            g_image_feat = np.sum(image_feat, axis=1) / np.sum(image_mask, axis=1, keepdims=True) # Average (g for global?) feat over all bboxes
+            g_image_feat = np.sum(image_feat, axis=1) / np.sum(image_mask, axis=1,
+                                                               keepdims=True)  # Average (g for global?) feat over all bboxes
             # print(np.sum(image_feat, axis=1).shape, np.sum(image_mask, axis=1, keepdims=True).shape) #(64, 2048) (64, 1)
             image_feat = np.concatenate([np.expand_dims(g_image_feat, axis=1), image_feat], axis=1)
             image_feat = np.array(image_feat, dtype=np.float32)
@@ -220,6 +226,7 @@ class ConceptCapLoaderTrain(object):
     def reset_index(self):
         core_ds = self.get_core_ds()
         core_ds.reset_index()
+
 
 class ConceptCapLoaderVal(object):
     """
@@ -320,6 +327,7 @@ class ConceptCapLoaderVal(object):
         core_ds = self.get_core_ds()
         core_ds.reset_index()
 
+
 class BertPreprocessBatch(object):
     def __init__(
             self,
@@ -356,17 +364,17 @@ class BertPreprocessBatch(object):
         # Nathan: I created RPN features with MIN_BOXES=10/MAX_BOXES=100, they did MIN=MAX=36.
         # For now, cropping regions to [:36] if longer, and later making sure to ignore indices > num_boxes if shorter
         # num_boxes = int(num_boxes)
-        num_boxes = min(int(num_boxes),REGION_LEN)
+        num_boxes = min(int(num_boxes), REGION_LEN)
         image_feature[:num_boxes] = image_feature_wp[:num_boxes]
         image_target[:num_boxes] = image_target_wp[:num_boxes]
-        image_location[:num_boxes,:4] = image_location_wp[:num_boxes]
+        image_location[:num_boxes, :4] = image_location_wp[:num_boxes]
         # num_boxes = int(num_boxes)
         # image_feature[:num_boxes] = image_feature_wp
         # image_target[:num_boxes] = image_target_wp
         # image_location[:num_boxes, :4] = image_location_wp
 
         image_location[:, 4] = (image_location[:, 3] - image_location[:, 1]) * (
-                    image_location[:, 2] - image_location[:, 0]) / (float(image_w) * float(image_h))
+                image_location[:, 2] - image_location[:, 0]) / (float(image_w) * float(image_h))
 
         image_location[:, 0] = image_location[:, 0] / float(image_w)
         image_location[:, 1] = image_location[:, 1] / float(image_h)
@@ -759,8 +767,8 @@ class ConceptCapLoaderRetrieval(object):
                     target_all[i] = 1
 
             batch = (
-            features_all, spatials_all, image_mask_all, caption, input_mask, segment_ids, target_all, caption_idx,
-            image_idx)
+                features_all, spatials_all, image_mask_all, caption, input_mask, segment_ids, target_all, caption_idx,
+                image_idx)
             batch = [torch.tensor(data) for data in batch]
             batch.append(txt_image_id)
             batch.append(caption)
@@ -806,7 +814,7 @@ class BertPreprocessRetrieval(object):
         image_location[:num_boxes, :4] = image_location_wp
 
         image_location[:, 4] = (image_location[:, 3] - image_location[:, 1]) * (
-                    image_location[:, 2] - image_location[:, 0]) / (float(image_w) * float(image_h))
+                image_location[:, 2] - image_location[:, 0]) / (float(image_w) * float(image_h))
 
         image_location[:, 0] = image_location[:, 0] / float(image_w)
         image_location[:, 1] = image_location[:, 1] / float(image_h)
