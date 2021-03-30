@@ -16,6 +16,8 @@
 """PyTorch BERT model."""
 
 import copy
+from time import sleep
+
 import json
 import logging
 import math
@@ -323,6 +325,7 @@ class BertEmbeddings(nn.Module):
         position_ids = position_ids.unsqueeze(0).expand_as(input_ids)
         if token_type_ids is None:
             token_type_ids = torch.zeros_like(input_ids)
+
 
         words_embeddings = self.word_embeddings(input_ids)
         position_embeddings = self.position_embeddings(position_ids)
@@ -1623,6 +1626,10 @@ class BertForMultiModalPreTraining(BertPreTrainedModel):
         causal_label_v=None,
         output_all_attention_masks=False
     ):
+        # if str(input_ids.device) != 'cuda:0' or str(self.bert.embeddings.word_embeddings.weight.device) != 'cuda:0':
+        #     print(5)
+        # print("SLEEPING FOR DEBUGGING")
+        # sleep(10000000)
         # in this model, we first embed the images.
         sequence_output_t, sequence_output_v, pooled_output_t, pooled_output_v, all_attention_mask = self.bert(
             input_ids,

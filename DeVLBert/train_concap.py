@@ -1,4 +1,4 @@
-from time import time as t
+from time import time as t, sleep
 import glob
 
 import warnings
@@ -34,9 +34,9 @@ import torch.distributed as dist
 import pdb
 from time import gmtime
 from constants import MODEL_CKPT_DIR
-from util import rank_to_device
+from util import rank_to_device, MyLogger, myprint
 from torch.nn.parallel import DistributedDataParallel as DDP
-
+logging.setLoggerClass(MyLogger)
 logging.basicConfig(
     format="%(asctime)s - %(levelname)s - %(name)s -   %(message)s",
     datefmt="%m/%d/%Y %H:%M:%S",
@@ -253,13 +253,21 @@ def main():
     # os.environ['CUDA_VISIBLE_DEVICES'] = ",".join([str(g) for g in args.gpus])
     # endregion
 
+    if args.save_name is not '':
+        timeStamp = args.save_name
+    else:
+        timeStamp = strftime("%d-%b-%y-%X-%a")
+        timeStamp += "_{:0>6d}".format(random.randint(0, 10e6))
+    savePath = os.path.join(args.output_dir, timeStamp)
+    if not os.path.exists(savePath):
+        os.makedirs(savePath)
     mp.spawn(main_single_process,
-             args=(args,),
+             args=(args, savePath),
              nprocs=args.world_size,
              join=True)
 
 
-def main_single_process(rank, args):
+def main_single_process(rank, args, savePath):
     setup(rank,args.world_size)
     s = t()
     if args.debug:
@@ -270,14 +278,6 @@ def main_single_process(rank, args):
     else:
         from devlbert.devlbert import BertForMultiModalPreTraining, BertConfig
     logger.info('\r\n'.join(f'{k}: {v}' for k, v in args.__dict__.items()))
-    if args.save_name is not '':
-        timeStamp = args.save_name
-    else:
-        timeStamp = strftime("%d-%b-%y-%X-%a")
-        timeStamp += "_{:0>6d}".format(random.randint(0, 10e6))
-    savePath = os.path.join(args.output_dir, timeStamp)
-    if not os.path.exists(savePath):
-        os.makedirs(savePath)
     config = BertConfig.from_json_file(args.config_file)
     if args.freeze > config.t_biattention_id[0]:
         config.fixed_t_layer = config.t_biattention_id[0]
@@ -293,6 +293,7 @@ def main_single_process(rank, args):
     device = torch.device("cuda", rank_to_device(rank))
     torch.cuda.set_device(device)
     n_gpu = 1
+    default_gpu = rank == 0
 
     if args.gradient_accumulation_steps < 1:
         raise ValueError(
@@ -338,9 +339,8 @@ def main_single_process(rank, args):
             * args.num_train_epochs
     )
 
-    viz = TBlogger(Path(args.output_dir, "logs"), timeStamp)
+    viz = TBlogger(Path(args.output_dir, "logs"), Path(savePath).name)
 
-    default_gpu = rank == 0
     # pdb.set_trace()
     if args.predict_feature:
         config.v_target_size = 2048
@@ -349,24 +349,31 @@ def main_single_process(rank, args):
         config.v_target_size = 1601
         config.predict_feature = False
     if args.from_pretrained:
+        model = DDP(BertForMultiModalPreTraining.from_pretrained(args.from_pretrained, config).to(device),
+                    device_ids=[device])
         ckpt_load_path = Path(savePath, f"model.checkpoint")
         if args.continue_training and Path(ckpt_load_path).exists():
             # ckpt_load_path = os.path.join(args.from_pretrained,
             #                               "pytorch_model_{}.bin".format(int(args.start_epoch) - 1))
             # model = BertForMultiModalPreTraining.from_pretrained(ckpt_load_path, config)
             print(f"Loading model from checkpoint {ckpt_load_path}")
-            model = torch.load(ckpt_load_path,map_location={f'cuda:{rank_to_device(MASTER_RANK)}': str(device)})
+            # map_location = {f'cuda:{rank_to_device(MASTER_RANK)}': str(device)}
+            model.load_state_dict(
+                torch.load(ckpt_load_path, map_location=device))
+            torch.cuda.empty_cache()
+            # model = torch.load(ckpt_load_path, map_location=map_location)
+
+            # if not default_gpu:
+            #     print(5)
+            # print("SLEEPING FOR DEBUGGING")
+            # sleep(10000000)
 
             # Load correct epoch
             epoch_file = get_epoch_file_path(savePath)
-
             if epoch_file is not None:
                 with open(epoch_file, 'r') as f:
                     args.start_epoch = json.load(f)
                 print(f"Loading start epoch from {epoch_file}")
-
-        else:
-            model = DDP(BertForMultiModalPreTraining.from_pretrained(args.from_pretrained, config).to(device), device_ids=[device])
     else:
         model = DDP(BertForMultiModalPreTraining(config).to(device), device_ids=[device])
 
@@ -477,7 +484,7 @@ def main_single_process(rank, args):
     logger.info("  Batch size = %d", args.train_batch_size)
     logger.info("  Num steps = %d", num_train_optimization_steps)
     global_step = 0
-    logger.debug(f'Getting to epoch loop took {t() - s} seconds')
+    myprint(f'Getting to epoch loop took {t() - s} seconds')
     # random.seed(torch.distributed.get_rank() * 2000)
     for epochId in range(int(args.start_epoch), int(args.num_train_epochs)):
 
@@ -504,14 +511,14 @@ def main_single_process(rank, args):
         for step, batch in iterator:
             first = False
             if first:
-                logger.debug(f"Loading first batch took {s - t()} seconds")
+                myprint(f"Loading first batch took {t() - s} seconds")
             else:
-                logger.debug(f"Loading non-first batch took {s - t()} seconds")
+                myprint(f"Loading non-first batch took {t() - s} seconds")
             s = t()
             training_step(args, batch, default_gpu, device,
                           epochId, model, optimizer, rank, savePath,
                           step, train_dataset, viz)
-            logger.debug(f"Entire train step took {s - t()} seconds")
+            myprint(f"Entire train step took {t() - s} seconds")
             s = t()
         # Do the evaluation
         # torch.set_grad_enabled(False)
@@ -618,6 +625,15 @@ def training_step(args, batch, default_gpu, device, epochId, model, optimizer, r
         batch
     )
     s = t()
+    myprint(f'Doing Model input --> model output losses')
+    # myprint(str(list(model.module.parameters())[0].device))
+    # myprint(str(input_ids.device))
+    # skip_sleep = False
+    # if not default_gpu:
+    #     print(5)
+    # if not skip_sleep:
+    #     print("SLEEPING FOR DEBUGGING")
+    #     sleep(10000000)
     masked_loss_t, masked_loss_v, next_sentence_loss, \
     causal_prediction_v_loss, causal_prediction_t_loss, \
     causal_prediction_v2t_loss, causal_prediction_t2v_loss = model(
@@ -634,7 +650,7 @@ def training_step(args, batch, default_gpu, device, epochId, model, optimizer, r
         causal_label_t,
         causal_label_v
     )
-    logger.debug(f'Model input --> model output losses took {s - t()}')
+    myprint(f'Model input --> model output losses took {t() - s}')
 
     masked_loss_v = masked_loss_v * args.img_weight
     loss = masked_loss_t + masked_loss_v + next_sentence_loss + \
@@ -645,10 +661,11 @@ def training_step(args, batch, default_gpu, device, epochId, model, optimizer, r
         optimizer.backward(loss)
     else:
         loss.backward()
-    logger.debug(f'Model input --> model output losses took {s - t()}')
+    myprint(f'Calculating gradients took {t() - s}')
     if math.isnan(loss.item()):
         pdb.set_trace()
     if default_gpu:
+        s = t()
         iterId = (sum(train_dataset.get_core_ds().current_key_idx_list) // len(batch)) + (epochId * len(train_dataset))
         viz.linePlot(iterId, loss.item(), "loss", "train")
         viz.linePlot(iterId, masked_loss_t.item(), "masked_loss_t", "train")
@@ -659,6 +676,7 @@ def training_step(args, batch, default_gpu, device, epochId, model, optimizer, r
         viz.linePlot(iterId, causal_prediction_v2t_loss.item(), "causal_prediction_v2t_loss", "train")
         viz.linePlot(iterId, causal_prediction_t2v_loss.item(), "causal_prediction_t2v_loss", "train")
         viz.linePlot(iterId, optimizer.get_lr()[0], 'learning_rate', 'train')
+        myprint(f"tboard logging took {t() - s}")
 
     if step % args.gradient_accumulation_steps == 0:
         # if args.fp16: Nathan
@@ -671,8 +689,12 @@ def training_step(args, batch, default_gpu, device, epochId, model, optimizer, r
         #     for param_group in optimizer.param_groups:
         #         param_group["lr"] = lr_this_step
 
+        s = t()
         optimizer.step()
+        myprint(f"Updating weights took  {t() - s}")
+        s = t()
         optimizer.zero_grad()
+        myprint(f"zero-ing gradients took  {t() - s}")
         # global_step += 1 #Nathan
 
     # Checkpointing
@@ -697,12 +719,12 @@ def checkpoint(savePath, model, optimizer, rank, device, train_dataset):
         # random parameters and gradients are synchronized in backward passes.
         # Therefore, saving it in one process is sufficient.
         print(f"\r\nStoring model and optimizer checkpoint in {savePath}")
-        for obj, path in zip([model, optimizer.state_dict()],
+        for obj, path in zip([model, optimizer],
                              [Path(savePath, f'{i}.checkpoint') for i in ['model', 'optimizer_state']]):
             old_ckpt_path_name = str(path) + '_old'
             if os.path.exists(path):
                 os.rename(path, old_ckpt_path_name)
-            torch.save(obj, path)
+            torch.save(obj.state_dict(), path)
         for obj, path in zip([model, optimizer],
                              [Path(savePath, f'{i}.checkpoint') for i in ['model', 'optimizer_state']]):
             old_ckpt_path_name = str(path) + '_old'
@@ -715,17 +737,17 @@ def checkpoint(savePath, model, optimizer, rank, device, train_dataset):
 
     # Use a barrier() to make sure that process 1 loads the model after process
     # 0 saves it.
+    myprint("Waiting before barrier")
     dist.barrier()
+    myprint("Got past barrier")
 
     # Store and reload over processes: model and optimizer state
-    map_location = {f'cuda:{rank_to_device(MASTER_RANK)}': str(device)}
+    # map_location = {f'cuda:{rank_to_device(MASTER_RANK)}': str(device)}
     model.load_state_dict(
-        torch.load(Path(savePath, f'model.checkpoint'),
-                       map_location=map_location).state_dict()
-    )
+        torch.load(Path(savePath, f'model.checkpoint'), map_location=device))
     optimizer.load_state_dict(
         torch.load(Path(savePath, f'optimizer_state.checkpoint'),
-                   map_location=map_location))
+                   map_location=device))
 
 
 
@@ -744,7 +766,7 @@ class TBlogger:
         print(f"logging file at: {log_dir}")
         self.logger = SummaryWriter(log_dir=log_dir)
 
-    def linePlot(self, step, val, split, key, xlabel="None"):
+    def linePlot(self, step, val, split, key, xlabel="None"): #TODO only do for default GPU
         self.logger.add_scalar(split + "/" + key, val, step)
 
 

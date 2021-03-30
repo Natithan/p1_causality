@@ -55,17 +55,27 @@ import lmdb
 import os
 import platform
 import torch
+from time import time as t
 from typing import List
 from tensorpack.utils import logger, get_rng
 from tensorpack.utils.serialize import dumps, loads
 from tensorpack.utils.develop import create_dummy_class  # noqa
 from tensorpack.utils.utils import get_tqdm
 from tensorpack.dataflow.base import DataFlow, DataFlowReentrantGuard
+from tensorpack.dataflow import BatchData
 from tensorpack.dataflow.common import MapData
 from tensorpack.dataflow.format import LMDBData
-from util import rank, world_size
+from util import get_rank, get_world_size, MyLogger, myprint
 import glob
+import logging
 
+logging.setLoggerClass(MyLogger)
+logging.basicConfig(
+    format="%(asctime)s - %(levelname)s - %(name)s -   %(message)s",
+    datefmt="%m/%d/%Y %H:%M:%S",
+    level=logging.INFO,
+)
+logger = logging.getLogger('__main__')
 __all__ = ['MyLMDBSerializer']
 
 from constants import MODEL_CKPT_DIR
@@ -82,6 +92,43 @@ def _reset_df_and_get_size(df):
 
 def enc(real_idx):
     return u'{:08}'.format(real_idx).encode('ascii')
+
+
+
+class MyBatchData(BatchData):
+    """
+    Stack datapoints into batches.
+    It produces datapoints of the same number of components as ``ds``, but
+    each component has one new extra dimension of size ``batch_size``.
+    The batch can be either a list of original components, or (by default)
+    a numpy array of original components.
+    """
+
+    def __iter__(self):
+        """
+        Yields:
+            Batched data by stacking each component on an extra 0th dimension.
+        """
+        holder = []
+        s = t()
+        times = []
+        sd = t()
+        for data in self.ds:
+            times.append(t()-sd)
+            holder.append(data)
+            if len(holder) == self.batch_size:
+                myprint(f"\r\nBatchData iteration took {t() - s}")
+                myprint(f"Iterating through {self.batch_size} elements of {self.ds} took {sum(times)}")
+                times = []
+                ss = t()
+                aggregated_batch = BatchData.aggregate_batch(holder, self.use_list)
+                myprint(f"BatchData.aggregate_batch took {t() - ss}")
+                yield aggregated_batch
+                s = t()
+                del holder[:]
+            sd = t()
+        if self.remainder and len(holder) > 0:
+            yield BatchData.aggregate_batch(holder, self.use_list)
 
 
 class MyLMDBSerializer:
@@ -209,8 +256,8 @@ class MyLMDBSerializer:
 
 class MyLMDBData(LMDBData):
     def __init__(self, lmdb_paths : List[str], shuffle=True, keys=None, savePath=MODEL_CKPT_DIR):
-        self.rank = rank()
-        self.nb_processes = world_size()
+        self.rank = get_rank()
+        self.nb_processes = get_world_size()
         self.savePath = savePath
 
         # Data is stored in multiple LMDB files. # of processes doesn't necessarily match number of LMDB files:
@@ -315,15 +362,20 @@ class MyLMDBData(LMDBData):
         self.dump_idxs_with_value_in_name(self.current_key_idx_list)
 
     def __iter__(self):
+        ys = t()
         with self._guard:
             for j, (txn, keys, start_key) in enumerate(zip(self._txns, self.keys_list, self.start_keys)):
                 for i, k in enumerate(keys[start_key:]):
+                    s = t()
                     if self.mini:
                         if start_key + i > 100:
                             break
                     self.current_key_idx_list[j] = start_key + i
                     v = txn.get(k)
+                    myprint(f"MyLMDBData iteration took {t() - s}")
+                    myprint(f"MyLMDBData between-yield time was {t() - ys}")
                     yield [k, v]
+                    ys = t()
 
     def __len__(self):
         return sum(len(ks) for ks in self.keys_list)

@@ -22,7 +22,7 @@ import os
 
 import cv2
 import numpy as np
-from util import index_df_column, open_tsv, world_size
+from util import index_df_column, open_tsv, get_world_size
 
 import torch
 
@@ -203,7 +203,7 @@ class CoCaInputDataflow(DataFlow):
         print(f"Done gathering image paths after {time() - s} seconds")
         self.num_files = len(self.image_ids)
         print('Number of images: {}.'.format(self.num_files))
-        print(FGS.local_rank, world_size())
+        print(FGS.local_rank, get_world_size())
 
 
         # region Storing / loading captions

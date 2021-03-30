@@ -17,17 +17,23 @@ import sys
 import pdb
 from constants import ID2CLASS_PATH
 from typing import List
-
+from time import time as t
+from util import MyLogger, myprint
 REGION_LEN = 36
 logging.basicConfig(
     format="%(asctime)s - %(levelname)s - %(name)s -   %(message)s",
     datefmt="%m/%d/%Y %H:%M:%S",
     level=logging.INFO,
 )
-from my_lmdb import MyLMDBSerializer, MyLMDBData
+from my_lmdb import MyLMDBSerializer, MyLMDBData, MyBatchData
 
-logger = logging.getLogger(__name__)
-
+logging.setLoggerClass(MyLogger)
+logging.basicConfig(
+    format="%(asctime)s - %(levelname)s - %(name)s -   %(message)s",
+    datefmt="%m/%d/%Y %H:%M:%S",
+    level=logging.INFO,
+)
+logger = logging.getLogger('__main__')
 
 class InputExample(object):
     """A single training/test example for the language model."""
@@ -168,7 +174,8 @@ class ConceptCapLoaderTrain(object):
         ds = td.MapData(ds, preprocess_function)
         # self.ds = td.PrefetchData(ds, 1)
         # ds = td.PrefetchDataZMQ(ds, num_workers) Nathan commenting out in hope of bypassing forking-debugger incompatibility
-        self.ds = td.BatchData(ds, batch_size)
+        # self.ds = td.BatchData(ds, batch_size)
+        self.ds = MyBatchData(ds, batch_size) #TODO probs multi-worker fetching is the solution for not making data loading the bottleneck
         # self.ds = ds
         self.ds.reset_state()
 
@@ -191,7 +198,9 @@ class ConceptCapLoaderTrain(object):
 
     def __iter__(self):
 
+        s1 = t()
         for batch in self.ds.get_data():
+            s = t()
             input_ids, input_mask, segment_ids, lm_label_ids, is_next, image_feat, \
             image_loc, image_target, image_label, image_mask, image_id, causal_label_t, causal_label_v = batch
 
@@ -217,8 +226,13 @@ class ConceptCapLoaderTrain(object):
 
             batch = (input_ids, input_mask, segment_ids, lm_label_ids, is_next, image_feat, image_loc, image_target, \
                      image_label, image_mask, image_id, causal_label_t, causal_label_v)
-
-            yield tuple(torch.tensor(data) for data in batch)
+            between_yields_time = t() - s1
+            concap_processing_time = t() - s
+            to_yield = tuple(torch.tensor(data) for data in batch)
+            myprint(f"ConceptCapLoaderTrain time between yields took {between_yields_time}")
+            myprint(f"ConceptCapLoaderTrain time took {concap_processing_time}")
+            yield to_yield
+            s1 = t()
 
     def __len__(self):
         return self.ds.size()
@@ -227,6 +241,8 @@ class ConceptCapLoaderTrain(object):
         core_ds = self.get_core_ds()
         core_ds.reset_index()
 
+    def reset_state(self):
+        self.ds.reset_state()
 
 class ConceptCapLoaderVal(object):
     """
@@ -329,6 +345,8 @@ class ConceptCapLoaderVal(object):
 
 
 class BertPreprocessBatch(object):
+    global logger
+    logger.setLevel(logging.DEBUG)
     def __init__(
             self,
             caption_path,
@@ -354,7 +372,7 @@ class BertPreprocessBatch(object):
         self.visualization = visualization
 
     def __call__(self, data):
-
+        s =t()
         image_feature_wp, image_target_wp, image_location_wp, num_boxes, image_h, image_w, image_id, caption = data
 
         image_feature = np.zeros((self.region_len, 2048), dtype=np.float32)
@@ -421,6 +439,7 @@ class BertPreprocessBatch(object):
             causal_label_t,
             causal_label_v
         )
+        myprint(f"BertPreprocessBatch call took {t() - s}")
         return cur_tensors
 
     def random_cap(self, caption):

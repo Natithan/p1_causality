@@ -1,3 +1,5 @@
+from logging import Logger, DEBUG
+
 from time import time
 
 import os
@@ -28,8 +30,10 @@ def distributed(args) -> bool:
 def get_free_gpus():
     regex = r"MB \|(.*?)\n"
     processes = [re.search(regex, l).groups()[0] for l in os.popen('gpustat --no-header').readlines()]
-    free_gpus = [i for i, p in enumerate(processes) if all([('nathan' in s) for s in p.split()])] # gpus where only my processes are running
+    free_gpus = [i for i, p in enumerate(processes) if
+                 all([('nathan' in s) for s in p.split()])]  # gpus where only my processes are running
     return free_gpus
+
 
 def rank_to_device(rank):
     '''
@@ -38,6 +42,27 @@ def rank_to_device(rank):
     free_gpus = get_free_gpus()
     assert len(free_gpus) > rank, "Rank larger than number of available GPUs"
     return free_gpus[rank]
+
+def myprint(msg):
+    rank = get_rank()
+    msg = f"rank {rank}: " + msg
+    print(msg)
+
+class MyLogger(Logger):
+    def debug(self, msg, *args, **kwargs):
+        """
+        Log 'msg % args' with severity 'DEBUG'.
+
+        To pass exception information, use the keyword argument exc_info with
+        a true value, e.g.
+
+        logger.debug("Houston, we have a %s", "thorny problem", exc_info=1)
+        """
+        rank = get_rank()
+        msg = f"rank {rank} device {rank_to_device(rank)}: " + msg
+        if self.isEnabledFor(DEBUG):
+            self._log(DEBUG, msg, args, **kwargs)
+
 
 def show_from_tuple(rpn_tuple):
     _, cls_probs, bboxes, _, _, _, img_id, caption = rpn_tuple
@@ -78,14 +103,15 @@ def open_tsv(fname, folder):
     return df
 
 
-def world_size() -> int:
+def get_world_size() -> int:
     if not dist.is_available():
         return 1
     if not dist.is_initialized():
         return 1
     return dist.get_world_size()
 
-def rank() -> int:
+
+def get_rank() -> int:
     if not dist.is_available():
         return 0
     if not dist.is_initialized():

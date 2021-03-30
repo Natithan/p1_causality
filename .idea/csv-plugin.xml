@@ -24,6 +24,20 @@
             </Attribute>
           </value>
         </entry>
+        <entry key="\DeVLBert\cublas_error_test.py">
+          <value>
+            <Attribute>
+              <option name="separator" value="," />
+            </Attribute>
+          </value>
+        </entry>
+        <entry key="\DeVLBert\dataflow_speed_test.py">
+          <value>
+            <Attribute>
+              <option name="separator" value="," />
+            </Attribute>
+          </value>
+        </entry>
         <entry key="\DeVLBert\devlbert\datasets\concept_cap_dataset.py">
           <value>
             <Attribute>
