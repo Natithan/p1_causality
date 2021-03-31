@@ -1,6 +1,6 @@
 from logging import Logger, DEBUG
 
-from time import time
+from time import time, strftime
 
 import os
 import pandas as pd
@@ -14,6 +14,8 @@ import numpy as np
 import re
 from torch import distributed as dist
 import torch
+
+from my_lmdb import MyLMDBData
 from tools.DownloadConcptualCaption.download_data import _file_name
 
 with open("/cw/liir/NoCsBack/testliir/nathan/p1_causality/DeVLBert/dic/objects_vocab.txt", "r") as vocab:
@@ -45,8 +47,8 @@ def rank_to_device(rank):
 
 def myprint(msg):
     rank = get_rank()
-    msg = f"rank {rank}: " + msg
-    print(msg)
+    pre_msg = f'rank {rank} pid {os.getpid()},{strftime("%d %H:%M:%S")}: '
+    print(pre_msg + msg)
 
 class MyLogger(Logger):
     def debug(self, msg, *args, **kwargs):
@@ -117,3 +119,10 @@ def get_rank() -> int:
     if not dist.is_initialized():
         return 0
     return torch.distributed.get_rank()
+
+
+def get_core_ds(ds) -> MyLMDBData:
+    core_ds = ds
+    while not isinstance(core_ds, MyLMDBData):
+        core_ds = core_ds.ds
+    return core_ds

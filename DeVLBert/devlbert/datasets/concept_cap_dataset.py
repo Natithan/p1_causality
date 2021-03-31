@@ -1,4 +1,8 @@
 import copy
+import glob
+
+from pathlib import Path
+
 import json
 import logging
 import os
@@ -18,14 +22,16 @@ import pdb
 from constants import ID2CLASS_PATH
 from typing import List
 from time import time as t
-from util import MyLogger, myprint
+from util import MyLogger, myprint, get_rank, get_world_size, get_core_ds
+
 REGION_LEN = 36
+MINI_SIZE = 100
 logging.basicConfig(
     format="%(asctime)s - %(levelname)s - %(name)s -   %(message)s",
     datefmt="%m/%d/%Y %H:%M:%S",
     level=logging.INFO,
 )
-from my_lmdb import MyLMDBSerializer, MyLMDBData, MyBatchData
+from my_lmdb import MyLMDBSerializer, MyLMDBData, MyBatchData, MyMultiProcessRunnerZMQ
 
 logging.setLoggerClass(MyLogger)
 logging.basicConfig(
@@ -96,6 +102,10 @@ class ConceptCapLoaderTrain(object):
     """
     Data loader. Combines a dataset and a sampler, and provides
     single- or multi-process iterators over the dataset.
+
+    Resampling version of data iteration (each datapoint sampled i.i.d., with possible duplicates between workers)
+    , without corresponding per-worker checkpointing of which part of data they are
+     responsible for, and what location in that part they are currently at
     Arguments:
         mode (str, required): mode of dataset to operate in, one of ['train', 'val']
         batch_size (int, optional): how many samples per batch to load
@@ -111,7 +121,7 @@ class ConceptCapLoaderTrain(object):
             the size of dataset is not divisible by the batch size, then the last batch
             will be smaller. (default: False)
         cuda (bool, optional): set to ``True`` and the PyTorch tensors will get preloaded
-            to the GPU for you (necessary because this lets us to uint8 conversion on the 
+            to the GPU for you (necessary because this lets us to uint8 conversion on the
             GPU, which is faster).
     """
 
@@ -156,9 +166,9 @@ class ConceptCapLoaderTrain(object):
         # caption_path = "/mnt3/xuesheng/features_lmdb/CC/caption_train.json"
         print(f"Loading from{lmdb_files}")
 
-        ds = MyLMDBSerializer.load(lmdb_files, shuffle=True, savePath=savePath)
+        ds = MyLMDBSerializer.load(lmdb_files, shuffle=True)
         self.num_dataset = len(ds)
-
+        self.savePath = savePath
         preprocess_function = BertPreprocessBatch(
             caption_path,
             tokenizer,
@@ -175,26 +185,15 @@ class ConceptCapLoaderTrain(object):
         # self.ds = td.PrefetchData(ds, 1)
         # ds = td.PrefetchDataZMQ(ds, num_workers) Nathan commenting out in hope of bypassing forking-debugger incompatibility
         # self.ds = td.BatchData(ds, batch_size)
-        self.ds = MyBatchData(ds, batch_size) #TODO probs multi-worker fetching is the solution for not making data loading the bottleneck
+        ds = td.MultiProcessRunnerZMQ(ds, num_workers)
+        if mini:
+            ds._size = MINI_SIZE
+        self.ds = MyBatchData(ds, batch_size)
         # self.ds = ds
         self.ds.reset_state()
 
         self.batch_size = batch_size
         self.num_workers = num_workers
-        core = self.get_core_ds()
-        core.set_mini(mini)
-
-    # Nathan
-    def store_checkpoint(self):
-        # Digging through all the wrappers
-        core_ds = self.get_core_ds()
-        core_ds.store_checkpoint()
-
-    def get_core_ds(self) -> MyLMDBData:
-        core_ds = self.ds
-        while not isinstance(core_ds, MyLMDBData):
-            core_ds = core_ds.ds
-        return core_ds
 
     def __iter__(self):
 
@@ -226,10 +225,138 @@ class ConceptCapLoaderTrain(object):
 
             batch = (input_ids, input_mask, segment_ids, lm_label_ids, is_next, image_feat, image_loc, image_target, \
                      image_label, image_mask, image_id, causal_label_t, causal_label_v)
+            to_yield = tuple(torch.tensor(data) for data in batch)
             between_yields_time = t() - s1
             concap_processing_time = t() - s
+            myprint(f"ENTIRE BETWEEN-YIELD TIME WAS  {between_yields_time}")
+            myprint(f"ConceptCapLoaderTrain time took {concap_processing_time}")
+            yield to_yield
+            s1 = t()
+
+    def __len__(self):
+        return self.ds.size()
+
+    def reset_state(self):
+        self.ds.reset_state()
+
+
+class NonResamplingConceptCapLoaderTrain(object):
+    """
+    Non-resampling version of data iteration (each datapoint sampled exactly once, in shuffled way)
+    , with corresponding per-worker checkpointing of which part of data they are
+     responsible for, and what location in that part they are currently at
+    """
+
+    def __init__(
+            self,
+            tokenizer,
+            seq_len,
+            encoding="utf-8",
+            lmdb_paths: List = None,
+            predict_feature=False,
+            hard_negative=False,
+            batch_size=512,
+            shuffle=False,
+            num_workers=25,
+            cache=50000,
+            drop_last=False,
+            cuda=False,
+            distributed=True,
+            visualization=False,
+            savePath=None,
+            mini=False
+    ):
+        if lmdb_paths:
+            lmdb_files = lmdb_paths
+        else:
+            # if dist.is_available() and distributed:
+            #     num_replicas = dist.get_world_size()
+            #     # assert num_replicas == 8
+            #     rank = dist.get_rank()
+            #     # if not os.path.exists(lmdb_file):
+            #     # lmdb_file = "/srv/share/datasets/conceptual_caption/training_feat_part_" + str(rank) + ".lmdb"
+            # else:
+            #     # lmdb_file = "/coc/dataset/conceptual_caption/training_feat_all.lmdb"
+            #     # if not os.path.exists(lmdb_file):
+            #     num_replicas = 1
+            #     rank = 0
+            #     print(f"WARNING: only loading from {LMDB_PATHS[rank]}")
+            #     # lmdb_file = "/mnt3/xuesheng/features_lmdb/CC/training_feat_part_0.lmdb" #Nathan
+            lmdb_files = LMDB_PATHS
+
+        caption_path = CAPTION_PATH
+        # caption_path = "/mnt3/xuesheng/features_lmdb/CC/caption_train.json"
+        print(f"Loading from{lmdb_files}")
+
+        ds = MyLMDBSerializer.load(lmdb_files, shuffle=True, savePath=savePath)
+        self.core_ds = get_core_ds(ds)
+        self.core_ds.set_mini(mini)
+        self.num_dataset = len(ds)
+        self.savePath = savePath
+        preprocess_function = BertPreprocessBatch(
+            caption_path,
+            tokenizer,
+            seq_len,
+            REGION_LEN,
+            self.num_dataset,
+            encoding="utf-8",
+            predict_feature=predict_feature,
+        )
+
+        # ds = td.LocallyShuffleData(ds, cache)
+        # ds = td.PrefetchData(ds, 5000, 1)
+        ds = td.MapData(ds, preprocess_function)
+        # self.ds = td.PrefetchData(ds, 1)
+        # ds = td.PrefetchDataZMQ(ds, num_workers) Nathan commenting out in hope of bypassing forking-debugger incompatibility
+        # self.ds = td.BatchData(ds, batch_size)
+        ds = MyMultiProcessRunnerZMQ(ds, num_workers)
+        self.ds = MyBatchData(ds, batch_size)
+        # self.ds = ds
+        self.ds.reset_state()
+
+        self.batch_size = batch_size
+        self.num_workers = num_workers
+
+    # Nathan
+    def store_checkpoint(self): #TODO
+        self.core_ds.store_checkpoint()
+
+
+
+    def __iter__(self):
+
+        s1 = t()
+        for batch in self.ds.get_data():
+            s = t()
+            input_ids, input_mask, segment_ids, lm_label_ids, is_next, image_feat, \
+            image_loc, image_target, image_label, image_mask, image_id, causal_label_t, causal_label_v = batch
+
+            batch_size = input_ids.shape[0]
+            g_image_feat = np.sum(image_feat, axis=1) / np.sum(image_mask, axis=1,
+                                                               keepdims=True)  # Average (g for global?) feat over all bboxes
+            # print(np.sum(image_feat, axis=1).shape, np.sum(image_mask, axis=1, keepdims=True).shape) #(64, 2048) (64, 1)
+            image_feat = np.concatenate([np.expand_dims(g_image_feat, axis=1), image_feat], axis=1)
+            image_feat = np.array(image_feat, dtype=np.float32)
+            # print(image_feat.shape) # (64, 37, 2048)
+
+            # g_image_feat_og = np.sum(image_feature_og, axis=1) / np.sum(image_mask, axis=1, keepdims=True)
+            # image_feature_og = np.concatenate([np.expand_dims(g_image_feat_og, axis=1), image_feature_og], axis=1)
+            # image_feature_og = np.array(image_feature_og, dtype=np.float32)
+
+            g_image_loc = np.repeat(np.array([[0, 0, 1, 1, 1]], dtype=np.float32), batch_size, axis=0)
+            image_loc = np.concatenate([np.expand_dims(g_image_loc, axis=1), image_loc], axis=1)
+
+            image_loc = np.array(image_loc, dtype=np.float32)
+            g_image_mask = np.repeat(np.array([[1]]), batch_size, axis=0)
+            image_mask = np.concatenate([g_image_mask, image_mask], axis=1)
+            # print(image_mask.shape) # (64, 37)
+
+            batch = (input_ids, input_mask, segment_ids, lm_label_ids, is_next, image_feat, image_loc, image_target, \
+                     image_label, image_mask, image_id, causal_label_t, causal_label_v)
             to_yield = tuple(torch.tensor(data) for data in batch)
-            myprint(f"ConceptCapLoaderTrain time between yields took {between_yields_time}")
+            between_yields_time = t() - s1
+            concap_processing_time = t() - s
+            myprint(f"ENTIRE BETWEEN-YIELD TIME WAS  {between_yields_time}")
             myprint(f"ConceptCapLoaderTrain time took {concap_processing_time}")
             yield to_yield
             s1 = t()
@@ -238,8 +365,20 @@ class ConceptCapLoaderTrain(object):
         return self.ds.size()
 
     def reset_index(self):
-        core_ds = self.get_core_ds()
-        core_ds.reset_index()
+        # core_ds = get_core_ds(self.ds)
+        # core_ds.reset_index()
+        mp_ds = get_mp_ds(self.ds)
+        mp_ds.reset_state()
+
+    def reset_index_files(self):
+        p = Path(self.savePath, f"key_index_{get_rank()}_of_{get_world_size()}")
+        search_regex = p + '_*'
+        res = glob.glob(search_regex)
+        assert len(res) != 0
+        for p in res:
+            os.remove(p)
+        self.reset_state()
+
 
     def reset_state(self):
         self.ds.reset_state()
@@ -340,8 +479,12 @@ class ConceptCapLoaderVal(object):
         return self.ds.size()
 
     def reset_index(self):
-        core_ds = self.get_core_ds()
-        core_ds.reset_index()
+        # core_ds = get_core_ds(self.ds)
+        # core_ds.reset_index()
+        raise Exception("ConceptCapLoaderVal TODO ;)")
+        # mp_ds = get_mp_ds(self.ds)
+        # mp_ds.reset_state()
+
 
 
 class BertPreprocessBatch(object):
@@ -372,7 +515,7 @@ class BertPreprocessBatch(object):
         self.visualization = visualization
 
     def __call__(self, data):
-        s =t()
+        # s =t()
         image_feature_wp, image_target_wp, image_location_wp, num_boxes, image_h, image_w, image_id, caption = data
 
         image_feature = np.zeros((self.region_len, 2048), dtype=np.float32)
@@ -439,7 +582,7 @@ class BertPreprocessBatch(object):
             causal_label_t,
             causal_label_v
         )
-        myprint(f"BertPreprocessBatch call took {t() - s}")
+        # myprint(f"BertPreprocessBatch call took {t() - s}")
         return cur_tensors
 
     def random_cap(self, caption):
@@ -946,3 +1089,4 @@ class BertPreprocessRetrieval(object):
                 break
 
             tokens_b.pop()
+

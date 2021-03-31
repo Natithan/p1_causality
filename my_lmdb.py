@@ -49,12 +49,19 @@
 
 # -*- coding: utf-8 -*-
 # File: serialize.py
+import itertools
+
+import sys
+
 import pickle
+import zmq
 from pathlib import Path
 import lmdb
 import os
 import platform
 import torch
+from tensorpack.dataflow.parallel import _repeat_iter, _ExceptionWrapper, _zmq_catch_error, _get_pipe_name, _bind_guard
+from tensorpack.utils.concurrency import enable_death_signal
 from time import time as t
 from typing import List
 from tensorpack.utils import logger, get_rng
@@ -62,12 +69,14 @@ from tensorpack.utils.serialize import dumps, loads
 from tensorpack.utils.develop import create_dummy_class  # noqa
 from tensorpack.utils.utils import get_tqdm
 from tensorpack.dataflow.base import DataFlow, DataFlowReentrantGuard
-from tensorpack.dataflow import BatchData
+from tensorpack.dataflow import BatchData, MultiProcessRunnerZMQ
 from tensorpack.dataflow.common import MapData
 from tensorpack.dataflow.format import LMDBData
-from util import get_rank, get_world_size, MyLogger, myprint
+from util import get_rank, get_world_size, MyLogger, myprint, get_core_ds
 import glob
 import logging
+
+import multiprocessing as mp
 
 logging.setLoggerClass(MyLogger)
 logging.basicConfig(
@@ -79,7 +88,9 @@ logger = logging.getLogger('__main__')
 __all__ = ['MyLMDBSerializer']
 
 from constants import MODEL_CKPT_DIR
+
 NB_SAVED_SPLITS = 4
+
 
 def _reset_df_and_get_size(df):
     df.reset_state()
@@ -94,9 +105,11 @@ def enc(real_idx):
     return u'{:08}'.format(real_idx).encode('ascii')
 
 
-
 class MyBatchData(BatchData):
     """
+    Subclass for profiling.
+
+    OG:
     Stack datapoints into batches.
     It produces datapoints of the same number of components as ``ds``, but
     each component has one new extra dimension of size ``batch_size``.
@@ -114,10 +127,10 @@ class MyBatchData(BatchData):
         times = []
         sd = t()
         for data in self.ds:
-            times.append(t()-sd)
+            times.append(t() - sd)
             holder.append(data)
             if len(holder) == self.batch_size:
-                myprint(f"\r\nBatchData iteration took {t() - s}")
+                myprint(f"BatchData iteration took {t() - s}")
                 myprint(f"Iterating through {self.batch_size} elements of {self.ds} took {sum(times)}")
                 times = []
                 ss = t()
@@ -148,7 +161,7 @@ class MyLMDBSerializer:
     """
 
     @staticmethod
-    def save(df, path, write_frequency=5000,args=None):
+    def save(df, path, write_frequency=5000, args=None):
         """
         Args:
             df (DataFlow): the DataFlow to serialize.
@@ -238,7 +251,7 @@ class MyLMDBSerializer:
         db.close()
 
     @staticmethod
-    def load(paths : List[str], shuffle=True,savePath=MODEL_CKPT_DIR):
+    def load(paths: List[str], shuffle=True, savePath=None):
         """
         Note:
             If you found deserialization being the bottleneck, you can use :class:`LMDBData` as the reader
@@ -246,7 +259,10 @@ class MyLMDBSerializer:
         """
         # df = LMDBData(path, shuffle=shuffle)
         # #TODO if I end up storing multiple LMDB databases, this interleaved loading is not necessary anymore
-        df = MyLMDBData(paths, shuffle=shuffle,savePath=savePath)
+        if savePath is None:
+            df = MyNonResamplingLMDBData(paths, shuffle=shuffle, savePath=savePath)
+        else:
+            df = MyLMDBData(paths, shuffle=shuffle)
         return MapData(df, MyLMDBSerializer._deserialize_lmdb)
 
     @staticmethod
@@ -255,34 +271,37 @@ class MyLMDBSerializer:
 
 
 class MyLMDBData(LMDBData):
-    def __init__(self, lmdb_paths : List[str], shuffle=True, keys=None, savePath=MODEL_CKPT_DIR):
+    def __init__(self, lmdb_paths: List[str], shuffle=True, keys=None):
         self.rank = get_rank()
         self.nb_processes = get_world_size()
-        self.savePath = savePath
 
-        # Data is stored in multiple LMDB files. # of processes doesn't necessarily match number of LMDB files:
-        # might have multiple LMDB files per process, or multiple processes per LMDB file
-        self.key_indexes_checkpoint_path = Path(self.savePath, f"key_index_{self.rank}_of_{self.nb_processes}.pickle")
-        self.shuffled_keys_list_checkpoint_path = Path(self.savePath, f"shuffled_keys_{self.rank}_of_{self.nb_processes}.pickle")
         self._lmdb_paths = lmdb_paths
         self._shuffle = shuffle
 
         self._open_lmdbs()
         self._sizes = [txn.stat()['entries'] for txn in self._txns]
+
         self.rng = get_rng(self)
-        self._set_keys(keys)
         logger.info("Found {} entries in {}".format([s for s in self._sizes], [p for p in self._lmdb_paths]))
-        self.current_key_idx_list = [0]*len(self._lmdbs)
-        self.maybe_load_checkpoint()
 
         # Clean them up after finding the list of keys, since we don't want to fork them
         self._close_lmdbs()
 
+    def _set_keys(self, keys=None):
+
+        all_keys_list = [loads(txn.get(b'__keys__')) for txn in self._txns]
+        self.keys_list = [akeys[self.rank::self.nb_processes] for akeys in all_keys_list]
+        if self._shuffle:
+            self.shuffle_keys()
+
+    def shuffle_keys(self):
+        [self.rng.shuffle(ks) for ks in self.keys_list]  # Modifies in-place
+
     def _open_lmdbs(self):
         self._lmdbs = [lmdb.open(p,
-                               subdir=os.path.isdir(p),
-                               readonly=True, lock=False, readahead=True,
-                               map_size=1099511627776 * 2, max_readers=100)
+                                 subdir=os.path.isdir(p),
+                                 readonly=True, lock=False, readahead=True,
+                                 map_size=1099511627776 * 2, max_readers=100)
                        for p in self._lmdb_paths
                        ]
         self._txns = [env.begin() for env in self._lmdbs]
@@ -293,6 +312,213 @@ class MyLMDBData(LMDBData):
         del self._lmdbs
         del self._txns
 
+    def reset_state(self):
+        self._guard = DataFlowReentrantGuard()
+        self.rng = get_rng(self)
+        self.shuffle_keys()
+        self._open_lmdbs()  # open the LMDB in the worker process
+
+    def __iter__(self):
+        ys = t()
+
+        y_times = []
+        BATCH_SIZE = 96
+        with self._guard:
+            for j, (txn, keys) in enumerate(zip(self._txns, self.keys_list)):
+                for i, k in enumerate(keys):
+                    v = txn.get(k)
+                    y_times.append(t() - ys)
+                    if i % BATCH_SIZE == 0:
+                        myprint(f"MyLMDBData between-yield time for {BATCH_SIZE} elements was {sum(y_times)}")
+                        y_times = []
+                    yield [k, v]
+                    ys = t()
+
+    def __len__(self):
+        return sum(len(ks) for ks in self.keys_list)
+
+
+
+class MyMultiProcessRunnerZMQ(MultiProcessRunnerZMQ):
+    """
+    Run a DataFlow in >=1 processes, with ZeroMQ for communication.
+    It will fork the calling process of :meth:`reset_state()`,
+    and collect datapoints from the given dataflow in each process by ZeroMQ IPC pipe.
+    This is typically faster than :class:`MultiProcessRunner`.
+
+    Note:
+        1. (Data integrity) An iterator cannot run faster automatically -- what's happening is
+           that the process will be forked ``num_proc`` times.
+           There will be ``num_proc`` dataflow running in parallel and **independently**.
+           As a result, we have the following guarantee on the dataflow correctness:
+
+           a. When ``num_proc=1``, this dataflow produces the same data as the
+              given dataflow in the same order.
+           b. When ``num_proc>1``, if each sample from the given dataflow is i.i.d.,
+              then this dataflow produces the **same distribution** of data as the given dataflow.
+              This implies that there will be duplication, reordering, etc.
+              You probably only want to use it for training.
+
+              For example, if your original dataflow contains no randomness and produces the same first datapoint,
+              then after parallel prefetching, the datapoint will be produced ``num_proc`` times
+              at the beginning.
+              Even when your original dataflow is fully shuffled, you still need to be aware of the
+              `Birthday Paradox <https://en.wikipedia.org/wiki/Birthday_problem>`_
+              and know that you'll likely see duplicates.
+
+           To utilize parallelism with more strict data integrity, you can use
+           the parallel versions of :class:`MapData`: :class:`MultiThreadMapData`, :class:`MultiProcessMapData`.
+        2. `reset_state()` of the given dataflow will be called **once and only once** in the worker processes.
+        3. The fork of processes happened in this dataflow's `reset_state()` method.
+           Please note that forking a TensorFlow GPU session may be unsafe.
+           If you're managing this dataflow on your own,
+           it's better to fork before creating the session.
+        4. (Fork-safety) After the fork has happened, this dataflow becomes not fork-safe.
+           i.e., if you fork an already reset instance of this dataflow,
+           it won't be usable in the forked process. Therefore, do not nest two `MultiProcessRunnerZMQ`.
+        5. (Thread-safety) ZMQ is not thread safe. Therefore, do not call :meth:`get_data` of the same dataflow in
+           more than 1 threads.
+        6. This dataflow does not support windows. Use `MultiProcessRunner` which works on windows.
+        7. (For Mac only) A UNIX named pipe will be created in the current directory.
+           However, certain non-local filesystem such as NFS/GlusterFS/AFS doesn't always support pipes.
+           You can change the directory by ``export TENSORPACK_PIPEDIR=/other/dir``.
+           In particular, you can use somewhere under '/tmp' which is usually local.
+
+           Note that some non-local FS may appear to support pipes and code
+           may appear to run but crash with bizarre error.
+           Also note that ZMQ limits the maximum length of pipe path.
+           If you hit the limit, you can set the directory to a softlink
+           which points to a local directory.
+    """
+
+    class _Worker(mp.Process):
+        def __init__(self, ds, conn_name, hwm, idx, num_workers):
+            super(MyMultiProcessRunnerZMQ._Worker, self).__init__()
+            self.ds = ds
+            core_ds = get_core_ds(self.ds)
+            core_ds.set_key_state_files(idx, num_workers)
+            self.conn_name = conn_name
+            self.hwm = hwm
+            self.idx = idx
+
+        def run(self):
+            enable_death_signal(_warn=self.idx == 0)
+            self.ds.reset_state()
+            get_core_ds(self.ds)
+            itr = _repeat_iter(lambda: self.ds)
+
+            context = zmq.Context()
+            socket = context.socket(zmq.PUSH)
+            socket.set_hwm(self.hwm)
+            socket.connect(self.conn_name)
+            try:
+                while True:
+                    try:
+                        dp = next(itr)
+                        socket.send(dumps(dp), copy=False) # Nathan: assuming this blocks when queue is filled till hwm
+                    except Exception:
+                        dp = _ExceptionWrapper(sys.exc_info()).pack()
+                        socket.send(dumps(dp), copy=False)
+                        raise
+            # sigint could still propagate here, e.g. when nested
+            except KeyboardInterrupt:
+                pass
+            finally:
+                socket.close(0)
+                context.destroy(0)
+
+    def __init__(self, ds, num_proc=1, hwm=50):
+        """
+        Args:
+            ds (DataFlow): input DataFlow.
+            num_proc (int): number of processes to use.
+            hwm (int): the zmq "high-water mark" (queue size) for both sender and receiver.
+        """
+        super(MultiProcessRunnerZMQ, self).__init__()
+
+        self.ds = ds
+        self.num_proc = num_proc
+        self._hwm = hwm
+
+        if num_proc > 1:
+            logger.info("[MultiProcessRunnerZMQ] Will fork a dataflow more than one times. "
+                        "This assumes the datapoints are i.i.d.")
+        try:
+            self._size = ds.__len__()
+        except NotImplementedError:
+            self._size = -1
+
+    def _recv(self):
+        ret = loads(self.socket.recv(copy=False))
+        exc = _ExceptionWrapper.unpack(ret)
+        if exc is not None:
+            logger.error("Exception '{}' in worker:".format(str(exc.exc_type)))
+            raise exc.exc_type(exc.exc_msg)
+        return ret
+
+    def __len__(self):
+        return self.ds.__len__()
+
+    def __iter__(self):
+        with self._guard, _zmq_catch_error('MultiProcessRunnerZMQ'):
+            for k in itertools.count():
+                if self._size > 0 and k >= self._size:
+                    break
+                yield self._recv()
+
+    def reset_state(self):
+        super(MultiProcessRunnerZMQ, self).reset_state()
+        self._guard = DataFlowReentrantGuard()
+        self.context = zmq.Context()
+        self.socket = self.context.socket(zmq.PULL)
+        self.socket.set_hwm(self._hwm)
+        pipename = _get_pipe_name('dataflow')
+        _bind_guard(self.socket, pipename)
+
+        self._procs = [MyMultiProcessRunnerZMQ._Worker(self.ds, pipename, self._hwm, idx, self.num_proc)
+                       for idx in range(self.num_proc)]
+        self._start_processes()
+
+
+class MyNonResamplingLMDBData(LMDBData):
+    def __init__(self, lmdb_paths: List[str], shuffle=True, keys=None, savePath=MODEL_CKPT_DIR):
+        raise NotImplementedError
+        self.rank = get_rank()
+        self.nb_processes = get_world_size()
+        self.savePath = savePath
+
+        self._lmdb_paths = lmdb_paths
+        self._shuffle = shuffle
+
+        self._open_lmdbs()
+        self._sizes = [txn.stat()['entries'] for txn in self._txns]
+
+        self.rng = get_rng(self)
+        logger.info("Found {} entries in {}".format([s for s in self._sizes], [p for p in self._lmdb_paths]))
+        self.key_indexes_checkpoint_dir =  Path(self.savePath,
+                                                f"key_index_rank{self.rank}_wsize{self.nb_processes}")
+        self.shuffled_keys_list_checkpoint_dir = Path(self.savePath,
+                                                       f"shuffled_keys_rank{self.rank}_wsize{self.nb_processes}")
+        for directory in (self.key_indexes_checkpoint_dir, self.shuffled_keys_list_checkpoint_dir):
+            if not Path.exists(directory):
+                Path.mkdir(directory)
+        # Clean them up after finding the list of keys, since we don't want to fork them
+        self._close_lmdbs()
+
+
+    def set_key_state_files(self, worker_rank, num_workers):
+        '''
+        # __init__ only happens for all workers at once. This happens per worker
+        '''
+        # Data is stored in multiple LMDB files. # of processes doesn't necessarily match number of LMDB files:
+        # might have multiple LMDB files per process, or multiple processes per LMDB file
+        worker_identifying_addendum = f"workerrank{worker_rank}_workerwsize{num_workers}"
+        self.key_indexes_checkpoint_path = Path(self.key_indexes_checkpoint_dir,
+                                                worker_identifying_addendum),
+        self.shuffled_keys_list_checkpoint_path = Path(self.shuffled_keys_list_checkpoint_dir,
+                                                       worker_identifying_addendum)
+        self._set_keys()
+        self._set_key_start_idxs()
 
     def _set_keys(self, keys=None):
         if Path.exists(self.shuffled_keys_list_checkpoint_path):
@@ -304,76 +530,100 @@ class MyLMDBData(LMDBData):
             all_keys_list = [loads(txn.get(b'__keys__')) for txn in self._txns]
             self.keys_list = [akeys[self.rank::self.nb_processes] for akeys in all_keys_list]
             if self._shuffle:
-                [self.rng.shuffle(ks) for ks in self.keys_list] # Modifies in-place
+                [self.rng.shuffle(ks) for ks in self.keys_list]  # Modifies in-place
             with open(self.shuffled_keys_list_checkpoint_path, 'wb') as f:
                 pickle.dump(self.keys_list, f)
         # self.keys = all_keys[self.rank::self.nb_processes]# Changed to having different lmdb files.
         # self.keys_list = all_keys
+
+    def _set_key_start_idxs(self):
+        self.current_key_idx_list = [0] * len(self._lmdbs)
+        p = self.get_existing_key_idxs_file_path()
+        if p is not None:
+            print(f"Loading key indexes from existing files {p}")
+            self.load_idxs_with_value_in_name_path()
+        else:
+            print('\r\nNo key index found: starting from scratch')
+            self.start_key_idxs = [0] * len(self._lmdbs)
+            self.dump_idxs_with_value_in_name(self.start_key_idxs)
+
+    def _open_lmdbs(self):
+        self._lmdbs = [lmdb.open(p,
+                                 subdir=os.path.isdir(p),
+                                 readonly=True, lock=False, readahead=True,
+                                 map_size=1099511627776 * 2, max_readers=100)
+                       for p in self._lmdb_paths
+                       ]
+        self._txns = [env.begin() for env in self._lmdbs]
+
+    def _close_lmdbs(self):
+        for env in self._lmdbs:
+            env.close()
+        del self._lmdbs
+        del self._txns
 
     def reset_state(self):
         self._guard = DataFlowReentrantGuard()
         self.rng = get_rng(self)
         self._open_lmdbs()  # open the LMDB in the worker process
 
+    # def reset_index(self):
+    #     self.reset_state()
+    #
+    #     # Reset index in keys (no need to restore keys themselves)
+    #     self.start_keys = [0]*len(self._lmdbs)
+    #     self.current_key_idx_list = [0]*len(self._lmdbs)
+    #     self.dump_idxs_with_value_in_name(self.start_keys)
 
-    def reset_index(self):
-        self.reset_state()
-
-        # Reset index in keys (no need to restore keys themselves)
-        self.start_keys = [0]*len(self._lmdbs)
-        self.current_key_idx_list = [0]*len(self._lmdbs)
-        self.dump_idxs_with_value_in_name(self.start_keys)
-
-    def dump_idxs_with_value_in_name(self, keys):
+    def dump_idxs_with_value_in_name(self, key_idxs):
         # Remove previous checkpoint
-        old_path = self.get_existing_idxs_with_value_in_name_path()
+        old_path = self.get_existing_key_idxs_file_path()
         if old_path is not None:
             os.remove(old_path)
-        new_path = self.key_indexes_checkpoint_path.as_posix()[:-(len('.pickle'))] + f'_{str(keys)}.pickle'
+        new_path = self.key_indexes_checkpoint_path.as_posix() + f'_{str(key_idxs)}'
         with open(new_path, 'wb') as f:
-            pickle.dump(keys, f)
+            pickle.dump(key_idxs, f)
 
     def load_idxs_with_value_in_name_path(self):
-        path = self.get_existing_idxs_with_value_in_name_path()
+        path = self.get_existing_key_idxs_file_path()
         assert path is not None
         with open(path, 'rb') as f:
-            self.start_keys = pickle.load(f)
+            self.start_key_idxs = pickle.load(f)
 
-        print(f"Starting at indexes {[sk for sk in self.start_keys]} out of {[len(ks) for ks in self.keys_list]}")
+        myprint(f"Starting at indexes {[sk for sk in self.start_key_idxs]} out of {[len(ks) for ks in self.keys_list]}")
 
-    def get_existing_idxs_with_value_in_name_path(self):
-        search_regex = self.key_indexes_checkpoint_path.as_posix()[:-(len('.pickle'))] + f'_*.pickle'
-        res = glob.glob(search_regex)
+    def get_existing_key_idxs_file_path(self):
+        res = self.get_key_idxs_path_list()
         assert (len(res) <= 1)
         new_path = res[0] if len(res) != 0 else None
         return new_path
 
-    def maybe_load_checkpoint(self):
-        p = self.get_existing_idxs_with_value_in_name_path()
-        if p is not None:
-            print(f"Loading key indexes from existing files {p}")
-            self.load_idxs_with_value_in_name_path()
-        else:
-            print('\r\nNo key index found: starting from scratch')
-            self.start_keys = [0]*len(self._lmdbs)
-            self.dump_idxs_with_value_in_name(self.start_keys)
+    def get_key_idxs_path_list(self):
+        search_regex = self.key_indexes_checkpoint_path.as_posix() + f'_*'
+        res = glob.glob(search_regex)
+        return res
 
     def store_checkpoint(self):
+        myprint(self.current_key_idx_list)
         self.dump_idxs_with_value_in_name(self.current_key_idx_list)
 
     def __iter__(self):
         ys = t()
+
+        y_times = []
+        BATCH_SIZE = 96
         with self._guard:
-            for j, (txn, keys, start_key) in enumerate(zip(self._txns, self.keys_list, self.start_keys)):
+            for j, (txn, keys, start_key) in enumerate(zip(self._txns, self.keys_list, self.start_key_idxs)):
                 for i, k in enumerate(keys[start_key:]):
-                    s = t()
                     if self.mini:
                         if start_key + i > 100:
                             break
                     self.current_key_idx_list[j] = start_key + i
                     v = txn.get(k)
-                    myprint(f"MyLMDBData iteration took {t() - s}")
-                    myprint(f"MyLMDBData between-yield time was {t() - ys}")
+                    y_times.append(t() - ys)
+                    if i % BATCH_SIZE == 0:
+                        myprint(f"MyLMDBData between-yield time for {BATCH_SIZE} elements was {sum(y_times)}")
+                        y_times = []
                     yield [k, v]
                     ys = t()
 

@@ -3,8 +3,10 @@ import glob
 
 import warnings
 
+
 warnings.simplefilter(action='ignore', category=FutureWarning)
 warnings.simplefilter(action='ignore', category=UserWarning)
+from devlbert.datasets.concept_cap_dataset import get_core_ds
 import argparse
 import json
 import logging
@@ -34,7 +36,7 @@ import torch.distributed as dist
 import pdb
 from time import gmtime
 from constants import MODEL_CKPT_DIR
-from util import rank_to_device, MyLogger, myprint
+from util import rank_to_device, MyLogger, myprint, get_rank
 from torch.nn.parallel import DistributedDataParallel as DDP
 logging.setLoggerClass(MyLogger)
 logging.basicConfig(
@@ -374,6 +376,13 @@ def main_single_process(rank, args, savePath):
                 with open(epoch_file, 'r') as f:
                     args.start_epoch = json.load(f)
                 print(f"Loading start epoch from {epoch_file}")
+
+            # Load correct within-epoch step
+            step_file = get_step_file_path(savePath)
+            if step_file is not None:
+                with open(step_file, 'r') as f:
+                    start_step = json.load(f)
+                print(f"Loading start step from {step_file}")
     else:
         model = DDP(BertForMultiModalPreTraining(config).to(device), device_ids=[device])
 
@@ -494,20 +503,22 @@ def main_single_process(rank, args, savePath):
         if old_path is not None:
             os.remove(old_path)
         # store new file
-        epoch_file = Path(savePath, f'start_epoch_{epochId}.json')
+        epoch_file = Path(savePath, f'rank_{get_rank()}_start_epoch_{epochId}.json')
         with open(epoch_file, 'w') as f:
             json.dump(epochId, f)
-            print(f"Storing done epochs in {epoch_file}")
+            print(f"Stored done epochs in {epoch_file}")
 
-        # Getting progress bar iterator for main process
+        # Getting per-epoch progress bar iterator for main process
         basic_iterator = enumerate(train_dataset, 1)
         iterator = tqdm(basic_iterator,
                         total=len(train_dataset),
-                        initial=sum(train_dataset.get_core_ds().start_keys) // args.train_batch_size) \
+                        initial=start_step) \
             if default_gpu else basic_iterator
-
+        # train_dataset.
         s = t()
         first = True
+        myprint(f"Loading first batch ...")
+        total_steps = len(train_dataset) - start_step
         for step, batch in iterator:
             first = False
             if first:
@@ -518,7 +529,7 @@ def main_single_process(rank, args, savePath):
             training_step(args, batch, default_gpu, device,
                           epochId, model, optimizer, rank, savePath,
                           step, train_dataset, viz)
-            myprint(f"Entire train step took {t() - s} seconds")
+            myprint(f"ENTIRE TRAIN STEP TOOK {t() - s} SECONDS")
             s = t()
         # Do the evaluation
         # torch.set_grad_enabled(False)
@@ -600,7 +611,7 @@ def main_single_process(rank, args, savePath):
         #     viz.linePlot(epochId, eval_causal_loss, "causal_loss", "val")
 
         # Reset dataflow (esp. the pickled key index) after going through dataset
-        train_dataset.reset_index()
+        # train_dataset.reset_index() Not doing this:
 
         if default_gpu:
             # Save a trained model
@@ -666,7 +677,7 @@ def training_step(args, batch, default_gpu, device, epochId, model, optimizer, r
         pdb.set_trace()
     if default_gpu:
         s = t()
-        iterId = (sum(train_dataset.get_core_ds().current_key_idx_list) // len(batch)) + (epochId * len(train_dataset))
+        iterId = (sum(get_core_ds(train_dataset).current_key_idx_list) // len(batch)) + (epochId * len(train_dataset))
         viz.linePlot(iterId, loss.item(), "loss", "train")
         viz.linePlot(iterId, masked_loss_t.item(), "masked_loss_t", "train")
         viz.linePlot(iterId, masked_loss_v.item(), "masked_loss_v", "train")
@@ -701,24 +712,32 @@ def training_step(args, batch, default_gpu, device, epochId, model, optimizer, r
     global last_checkpoint_time
     if t() - last_checkpoint_time > args.checkpoint_period:
         last_checkpoint_time = t()
-        checkpoint(savePath, model, optimizer, rank, device, train_dataset)
+        checkpoint(savePath, model, optimizer, rank, device, step)
 
+
+
+def get_step_file_path(savePath):
+    search_regex = Path(savePath, f'rank_{get_rank()}_start_step_*.json').as_posix()
+    res = glob.glob(search_regex)
+    assert (len(res) <= 1)
+    step_file = res[0] if len(res) != 0 else None
+    return step_file
 
 def get_epoch_file_path(savePath):
-    search_regex = Path(savePath, f'start_epoch_*.json').as_posix()
+    search_regex = Path(savePath, f'rank_{get_rank()}_start_epoch_*.json').as_posix()
     res = glob.glob(search_regex)
     assert (len(res) <= 1)
     epoch_file = res[0] if len(res) != 0 else None
     return epoch_file
 
 
-def checkpoint(savePath, model, optimizer, rank, device, train_dataset):
+def checkpoint(savePath, model, optimizer, rank, device, step):
     # Store model parameters (and load it in models on other devices)
     if rank == 0:
         # All processes should see same parameters as they all start from same
         # random parameters and gradients are synchronized in backward passes.
         # Therefore, saving it in one process is sufficient.
-        print(f"\r\nStoring model and optimizer checkpoint in {savePath}")
+        myprint(f"\r\nStoring model and optimizer checkpoint in {savePath}")
         for obj, path in zip([model, optimizer],
                              [Path(savePath, f'{i}.checkpoint') for i in ['model', 'optimizer_state']]):
             old_ckpt_path_name = str(path) + '_old'
@@ -730,10 +749,19 @@ def checkpoint(savePath, model, optimizer, rank, device, train_dataset):
             old_ckpt_path_name = str(path) + '_old'
             if os.path.exists(old_ckpt_path_name):
                 os.remove(old_ckpt_path_name)
-        print(f"\r\nDone storing model and optimizer checkpoint.")
+        myprint(f"\r\nDone storing model and optimizer checkpoint.")
 
-    # Store where we are in the data
-    train_dataset.store_checkpoint()
+    # train_dataset.store_checkpoint() ONLY STORING HOW MUCH DONE, NOT WHAT DONE
+    # # Store where we are in the data
+    # delete the old file
+    old_path = get_step_file_path(savePath)
+    if old_path is not None:
+        os.remove(old_path)
+    # store new file
+    step_file = Path(savePath, f'rank_{get_rank()}_start_step_{step}.json')
+    with open(step_file, 'w') as f:
+        json.dump(step, f)
+        print(f"Stored done epochs in {step_file}")
 
     # Use a barrier() to make sure that process 1 loads the model after process
     # 0 saves it.
