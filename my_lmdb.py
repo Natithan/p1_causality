@@ -72,7 +72,7 @@ from tensorpack.dataflow.base import DataFlow, DataFlowReentrantGuard
 from tensorpack.dataflow import BatchData, MultiProcessRunnerZMQ
 from tensorpack.dataflow.common import MapData
 from tensorpack.dataflow.format import LMDBData
-from util import get_rank, get_world_size, MyLogger, myprint, get_core_ds
+from util import get_rank, get_world_size, MyLogger, myprint
 import glob
 import logging
 
@@ -259,7 +259,7 @@ class MyLMDBSerializer:
         """
         # df = LMDBData(path, shuffle=shuffle)
         # #TODO if I end up storing multiple LMDB databases, this interleaved loading is not necessary anymore
-        if savePath is None:
+        if savePath is not None:
             df = MyNonResamplingLMDBData(paths, shuffle=shuffle, savePath=savePath)
         else:
             df = MyLMDBData(paths, shuffle=shuffle)
@@ -280,10 +280,10 @@ class MyLMDBData(LMDBData):
 
         self._open_lmdbs()
         self._sizes = [txn.stat()['entries'] for txn in self._txns]
-
         self.rng = get_rng(self)
         logger.info("Found {} entries in {}".format([s for s in self._sizes], [p for p in self._lmdb_paths]))
 
+        self._set_keys()
         # Clean them up after finding the list of keys, since we don't want to fork them
         self._close_lmdbs()
 
@@ -329,7 +329,7 @@ class MyLMDBData(LMDBData):
                     v = txn.get(k)
                     y_times.append(t() - ys)
                     if i % BATCH_SIZE == 0:
-                        myprint(f"MyLMDBData between-yield time for {BATCH_SIZE} elements was {sum(y_times)}")
+                        myprint(f"MyLMDBData between-yield time for {len(y_times)} elements was {sum(y_times)}")
                         y_times = []
                     yield [k, v]
                     ys = t()
@@ -339,7 +339,7 @@ class MyLMDBData(LMDBData):
 
 
 
-class MyMultiProcessRunnerZMQ(MultiProcessRunnerZMQ):
+class MyOldMultiProcessRunnerZMQ(MultiProcessRunnerZMQ):
     """
     Run a DataFlow in >=1 processes, with ZeroMQ for communication.
     It will fork the calling process of :meth:`reset_state()`,
@@ -632,3 +632,10 @@ class MyNonResamplingLMDBData(LMDBData):
 
     def set_mini(self, mini):
         self.mini = mini
+
+
+def get_core_ds(ds) -> MyLMDBData:
+    core_ds = ds
+    while not isinstance(core_ds, MyLMDBData):
+        core_ds = core_ds.ds
+    return core_ds

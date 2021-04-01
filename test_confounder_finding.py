@@ -8,7 +8,7 @@ import torch
 import torch.nn.functional as F
 from pytorch_pretrained_bert import BertTokenizer
 
-from constants import DEVLBERT_ROOT_DIR, OLD_10_100_LMDB_PATH, MTURK_DIR
+from constants import DEVLBERT_ROOT_DIR, LMDB_PATHS, MTURK_DIR
 import os
 import pandas as pd
 pd.options.mode.chained_assignment = None  # default='warn'
@@ -18,12 +18,21 @@ os.chdir(DEVLBERT_ROOT_DIR)
 
 from devlbert.datasets import ConceptCapLoaderTrain
 from devlbert.devlbert import BertForMultiModalPreTraining, BertConfig
+from scipy.stats import hypergeom
 
 PRETRAINED_PATH = Path(DEVLBERT_ROOT_DIR, "save/devlbert/pytorch_model_11.bin")
 CFG_PATH = Path(DEVLBERT_ROOT_DIR, "config/bert_base_6layer_6conect.json")
 GROUND_TRUTH_PATH = Path(MTURK_DIR, 'output_mturk', 'pair_annotations_0.8_no_cfdnce_weight.tsv')
 gt_for_pair = pd.read_csv(GROUND_TRUTH_PATH, sep='\t')
 
+
+def randomAPExact(N, R): # From https://ufal.mff.cuni.cz/pbml/103/art-bestgen.pdf
+    ap = 0
+    for i in range(1,R+1):
+        for n in range(i,N-R+i+1):
+            ap += hypergeom(N, R, n).pmf(i)*(i/n)*(i/n)
+    ap /= R
+    return ap
 
 def main():
     model = BertForMultiModalPreTraining.from_pretrained(PRETRAINED_PATH, config=BertConfig.from_json_file(CFG_PATH))
@@ -34,7 +43,7 @@ def main():
 
     train_dataset = ConceptCapLoaderTrain(
         tokenizer,
-        lmdb_path=OLD_10_100_LMDB_PATH,
+        lmdb_paths=LMDB_PATHS,
         seq_len=36,
         batch_size=2,
         predict_feature=False,
@@ -121,7 +130,7 @@ def main():
                     else:
                         return None
                 nb_causes = len([r for r in result if r[1] == 'cause'])
-                expected_average_precision = None #TODO implement exact value from https://ufal.mff.cuni.cz/pbml/103/art-bestgen.pdf instead of just proportion of causes
+                expected_average_precision = randomAPExact(N=len(result),R=nb_causes)
                 if nb_causes == 0:
                     print(f"No causes in database for {effect_object}")
                 else:

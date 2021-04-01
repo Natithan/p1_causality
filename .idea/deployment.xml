@@ -39,16 +39,6 @@
           </mappings>
         </serverdata>
       </paths>
-      <paths name="Copy of project-level server 'rose'">
-        <serverdata>
-          <mappings>
-            <mapping deploy="/" local="$PROJECT_DIR$" />
-          </mappings>
-          <excludedPaths>
-            <excludedPath path="/p1_causality/DeVLBert/tools/DownloadConcptualCaption/Train_GCC-training.tsv" />
-          </excludedPaths>
-        </serverdata>
-      </paths>
       <paths name="arwen">
         <serverdata>
           <mappings>
@@ -159,6 +149,16 @@
           <mappings>
             <mapping local="$PROJECT_DIR$" web="/" />
           </mappings>
+        </serverdata>
+      </paths>
+      <paths name="rose">
+        <serverdata>
+          <mappings>
+            <mapping deploy="/" local="$PROJECT_DIR$" />
+          </mappings>
+          <excludedPaths>
+            <excludedPath path="/p1_causality/DeVLBert/tools/DownloadConcptualCaption/Train_GCC-training.tsv" />
+          </excludedPaths>
         </serverdata>
       </paths>
       <paths name="sauron">

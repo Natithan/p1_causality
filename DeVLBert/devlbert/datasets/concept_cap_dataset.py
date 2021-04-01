@@ -1,6 +1,8 @@
 import copy
 import glob
+import itertools
 
+import zmq
 from pathlib import Path
 
 import json
@@ -12,8 +14,12 @@ import lmdb
 import numpy as np
 import tensorpack.dataflow as td
 
+import multiprocessing as mp
 import torch
 from constants import CAPTION_PATH, LMDB_PATHS
+from tensorpack.dataflow.base import DataFlowReentrantGuard
+from tensorpack.dataflow.parallel import _repeat_iter, _ExceptionWrapper, _zmq_catch_error, _get_pipe_name, _bind_guard
+from tensorpack.utils.concurrency import enable_death_signal
 from torch.utils.data import Dataset
 from torch.utils.data.sampler import Sampler
 import torch.distributed as dist
@@ -21,9 +27,10 @@ import sys
 import pdb
 from constants import ID2CLASS_PATH
 from typing import List
-from time import time as t
-from util import MyLogger, myprint, get_rank, get_world_size, get_core_ds
-
+from time import time as t, sleep
+from util import MyLogger, myprint, get_rank, get_world_size
+from my_lmdb import get_core_ds
+from tensorpack.utils.serialize import dumps_once as dumps, loads_once as loads
 REGION_LEN = 36
 MINI_SIZE = 100
 logging.basicConfig(
@@ -31,7 +38,7 @@ logging.basicConfig(
     datefmt="%m/%d/%Y %H:%M:%S",
     level=logging.INFO,
 )
-from my_lmdb import MyLMDBSerializer, MyLMDBData, MyBatchData, MyMultiProcessRunnerZMQ
+from my_lmdb import MyLMDBSerializer, MyLMDBData, MyBatchData, MyOldMultiProcessRunnerZMQ
 
 logging.setLoggerClass(MyLogger)
 logging.basicConfig(
@@ -185,7 +192,7 @@ class ConceptCapLoaderTrain(object):
         # self.ds = td.PrefetchData(ds, 1)
         # ds = td.PrefetchDataZMQ(ds, num_workers) Nathan commenting out in hope of bypassing forking-debugger incompatibility
         # self.ds = td.BatchData(ds, batch_size)
-        ds = td.MultiProcessRunnerZMQ(ds, num_workers)
+        ds = MyMultiProcessRunnerZMQ(ds, num_workers)
         if mini:
             ds._size = MINI_SIZE
         self.ds = MyBatchData(ds, batch_size)
@@ -238,6 +245,144 @@ class ConceptCapLoaderTrain(object):
 
     def reset_state(self):
         self.ds.reset_state()
+
+
+class MyMultiProcessRunnerZMQ(td.MultiProcessRunnerZMQ):
+    """
+    Run a DataFlow in >=1 processes, with ZeroMQ for communication.
+    It will fork the calling process of :meth:`reset_state()`,
+    and collect datapoints from the given dataflow in each process by ZeroMQ IPC pipe.
+    This is typically faster than :class:`MultiProcessRunner`.
+
+    Note:
+        1. (Data integrity) An iterator cannot run faster automatically -- what's happening is
+           that the process will be forked ``num_proc`` times.
+           There will be ``num_proc`` dataflow running in parallel and **independently**.
+           As a result, we have the following guarantee on the dataflow correctness:
+
+           a. When ``num_proc=1``, this dataflow produces the same data as the
+              given dataflow in the same order.
+           b. When ``num_proc>1``, if each sample from the given dataflow is i.i.d.,
+              then this dataflow produces the **same distribution** of data as the given dataflow.
+              This implies that there will be duplication, reordering, etc.
+              You probably only want to use it for training.
+
+              For example, if your original dataflow contains no randomness and produces the same first datapoint,
+              then after parallel prefetching, the datapoint will be produced ``num_proc`` times
+              at the beginning.
+              Even when your original dataflow is fully shuffled, you still need to be aware of the
+              `Birthday Paradox <https://en.wikipedia.org/wiki/Birthday_problem>`_
+              and know that you'll likely see duplicates.
+
+           To utilize parallelism with more strict data integrity, you can use
+           the parallel versions of :class:`MapData`: :class:`MultiThreadMapData`, :class:`MultiProcessMapData`.
+        2. `reset_state()` of the given dataflow will be called **once and only once** in the worker processes.
+        3. The fork of processes happened in this dataflow's `reset_state()` method.
+           Please note that forking a TensorFlow GPU session may be unsafe.
+           If you're managing this dataflow on your own,
+           it's better to fork before creating the session.
+        4. (Fork-safety) After the fork has happened, this dataflow becomes not fork-safe.
+           i.e., if you fork an already reset instance of this dataflow,
+           it won't be usable in the forked process. Therefore, do not nest two `MultiProcessRunnerZMQ`.
+        5. (Thread-safety) ZMQ is not thread safe. Therefore, do not call :meth:`get_data` of the same dataflow in
+           more than 1 threads.
+        6. This dataflow does not support windows. Use `MultiProcessRunner` which works on windows.
+        7. (For Mac only) A UNIX named pipe will be created in the current directory.
+           However, certain non-local filesystem such as NFS/GlusterFS/AFS doesn't always support pipes.
+           You can change the directory by ``export TENSORPACK_PIPEDIR=/other/dir``.
+           In particular, you can use somewhere under '/tmp' which is usually local.
+
+           Note that some non-local FS may appear to support pipes and code
+           may appear to run but crash with bizarre error.
+           Also note that ZMQ limits the maximum length of pipe path.
+           If you hit the limit, you can set the directory to a softlink
+           which points to a local directory.
+    """
+
+    class _Worker(mp.Process):
+        def __init__(self, ds, conn_name, hwm, idx):
+            super(MyMultiProcessRunnerZMQ._Worker, self).__init__()
+            self.ds = ds
+            self.conn_name = conn_name
+            self.hwm = hwm
+            self.idx = idx
+
+        def run(self):
+            enable_death_signal(_warn=self.idx == 0)
+            self.ds.reset_state()
+            itr = _repeat_iter(lambda: self.ds)
+
+            context = zmq.Context()
+            socket = context.socket(zmq.PUSH)
+            socket.set_hwm(self.hwm)
+            socket.connect(self.conn_name)
+            try:
+                while True:
+                    try:
+                        dp = next(itr)
+                        socket.send(dumps(dp), copy=False)
+                    except Exception:
+                        dp = _ExceptionWrapper(sys.exc_info()).pack()
+                        socket.send(dumps(dp), copy=False)
+                        raise
+            # sigint could still propagate here, e.g. when nested
+            except KeyboardInterrupt:
+                pass
+            finally:
+                socket.close(0)
+                context.destroy(0)
+
+    def __init__(self, ds, num_proc=1, hwm=50):
+        """
+        Args:
+            ds (DataFlow): input DataFlow.
+            num_proc (int): number of processes to use.
+            hwm (int): the zmq "high-water mark" (queue size) for both sender and receiver.
+        """
+        super(td.MultiProcessRunnerZMQ, self).__init__()
+
+        self.ds = ds
+        self.num_proc = num_proc
+        self._hwm = hwm
+
+        if num_proc > 1:
+            logger.info("[MultiProcessRunnerZMQ] Will fork a dataflow more than one times. "
+                        "This assumes the datapoints are i.i.d.")
+        try:
+            self._size = ds.__len__()
+        except NotImplementedError:
+            self._size = -1
+
+    def _recv(self):
+        ret = loads(self.socket.recv(copy=False))
+        exc = _ExceptionWrapper.unpack(ret)
+        if exc is not None:
+            logger.error("Exception '{}' in worker:".format(str(exc.exc_type)))
+            raise exc.exc_type(exc.exc_msg)
+        return ret
+
+    def __len__(self):
+        return self.ds.__len__()
+
+    def __iter__(self):
+        with self._guard, _zmq_catch_error('MultiProcessRunnerZMQ'):
+            for k in itertools.count():
+                if self._size > 0 and k >= self._size:
+                    break
+                yield self._recv()
+
+    def reset_state(self):
+        super(td.MultiProcessRunnerZMQ, self).reset_state()
+        self._guard = DataFlowReentrantGuard()
+        self.context = zmq.Context()
+        self.socket = self.context.socket(zmq.PULL)
+        self.socket.set_hwm(self._hwm)
+        pipename = _get_pipe_name('dataflow')
+        _bind_guard(self.socket, pipename)
+        self._procs = [MyMultiProcessRunnerZMQ._Worker(self.ds, pipename, self._hwm, idx)
+                       for idx in range(self.num_proc)]
+        self._start_processes()
+
 
 
 class NonResamplingConceptCapLoaderTrain(object):
