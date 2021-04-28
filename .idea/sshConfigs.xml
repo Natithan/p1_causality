@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="SshConfigs">
+    <configs>
+      <sshConfig connectionConfig="{&quot;serverAliveInterval&quot;:300}" host="login.hpc.kuleuven.be" id="ecf27d3d-cdc1-4fea-ac8a-f988bb13b679" keyPath="\\wsl$\Ubuntu-20.04\root\.ssh\id_rsa_4096" port="22" customName="genius" nameFormat="CUSTOM" username="vsc33642">
+        <option name="customName" value="genius" />
+      </sshConfig>
+      <sshConfig host="login.hpc.kuleuven.be" id="7b0f3ee9-68ef-4693-bfe6-20c0e9e9f3c5" keyPath="\\wsl$\Ubuntu-20.04\root\.ssh\id_rsa_4096" port="22" nameFormat="DESCRIPTIVE" username="vsc33642" />
+    </configs>
+  </component>
+</project>

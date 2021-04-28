@@ -1,3 +1,4 @@
+#region pre-stuff
 from time import time as t, sleep
 import glob
 
@@ -37,7 +38,7 @@ import torch.distributed as dist
 import pdb
 from time import gmtime
 from constants import MODEL_CKPT_DIR
-from util import rank_to_device, MyLogger, myprint, get_rank
+from util import rank_to_device, MyLogger, myprint, get_rank, setup, cleanup
 from torch.nn.parallel import DistributedDataParallel as DDP
 logging.setLoggerClass(MyLogger)
 logging.basicConfig(
@@ -49,18 +50,7 @@ logger = logging.getLogger(__name__)
 
 last_checkpoint_time = t()
 MASTER_RANK = 0
-
-def setup(rank, world_size):
-    os.environ['MASTER_ADDR'] = 'localhost'
-    os.environ['MASTER_PORT'] = '12355'
-
-    # initialize the process group
-    dist.init_process_group("nccl", rank=rank, world_size=world_size)
-
-
-def cleanup():
-    dist.destroy_process_group()
-
+#endregion
 
 def main():
     # region Parser stuff
@@ -236,6 +226,11 @@ def main():
         help="if we need to continue a stopped pretraining procedure, add this"
     )
     parser.add_argument(
+        "--shuffle",
+        action="store_true",
+        help="Whether to shuffle the concap data"
+    )
+    parser.add_argument(
         "--gpus",
         nargs='+', type=int,
         help="which gpus to consider"
@@ -318,6 +313,8 @@ def main_single_process(rank, args, savePath):
     tokenizer = BertTokenizer.from_pretrained(
         args.bert_model, do_lower_case=args.do_lower_case
     )
+
+
     train_dataset = ConceptCapLoaderTrain(
         tokenizer,
         seq_len=args.max_seq_length,
@@ -325,7 +322,8 @@ def main_single_process(rank, args, savePath):
         predict_feature=args.predict_feature,
         num_workers=args.num_workers,
         savePath=savePath,
-        mini=args.mini
+        mini=args.mini,
+        shuffle=args.shuffle
     )
     # validation_dataset = ConceptCapLoaderVal(
     #     args.validation_file,
@@ -372,7 +370,8 @@ def main_single_process(rank, args, savePath):
             # model = BertForMultiModalPreTraining.from_pretrained(ckpt_load_path, config)
             print(f"Loading model from checkpoint {ckpt_load_path}")
             # map_location = {f'cuda:{rank_to_device(MASTER_RANK)}': str(device)}
-            model.load_state_dict(
+
+            model.module.load_state_dict(
                 torch.load(ckpt_load_path, map_location=device))
             torch.cuda.empty_cache()
             # model = torch.load(ckpt_load_path, map_location=map_location)
@@ -392,8 +391,9 @@ def main_single_process(rank, args, savePath):
     else:
         model = DDP(BertForMultiModalPreTraining(config).to(device), device_ids=[device])
 
-    if args.fp16:
-        model.half()
+    # Nathan: updating according to https://nvidia.github.io/apex/amp.html#transition-guide-for-old-api-users
+    # if args.fp16:
+        # model.half() # replacing with "model, optimizer = amp.initialize(mode, optimizer,opt_level='O2')" later on
 
     # elif n_gpu > 1:
     no_decay = ["bias", "LayerNorm.bias", "LayerNorm.weight"]
@@ -454,9 +454,11 @@ def main_single_process(rank, args, savePath):
             print(len(list(model.named_parameters())), len(optimizer_grouped_parameters))
     # set different parameters for vision branch and lanugage branch.
     if args.fp16:
+        # Nathan: updating according to https://nvidia.github.io/apex/amp.html#transition-guide-for-old-api-users
         try:
-            from apex.contrib.optimizers import FP16_Optimizer
-            from apex.contrib.optimizers import FusedAdam
+            # from apex.contrib.optimizers import FP16_Optimizer
+            # from apex.contrib.optimizers import FusedAdam
+            from apex.optimizers import FusedAdam
         except ImportError:
             raise ImportError(
                 "Please install apex from https://www.github.com/nvidia/apex to use distributed and fp16 training."
@@ -465,13 +467,12 @@ def main_single_process(rank, args, savePath):
         optimizer = FusedAdam(
             optimizer_grouped_parameters,
             lr=args.learning_rate,
-            bias_correction=False,
-            max_grad_norm=1.0,
-        )
-        if args.loss_scale == 0:
-            optimizer = FP16_Optimizer(optimizer, dynamic_loss_scale=True)
-        else:
-            optimizer = FP16_Optimizer(optimizer, static_loss_scale=args.loss_scale)
+            bias_correction=False)
+        # if args.loss_scale == 0:
+        #     optimizer = FP16_Optimizer(optimizer, dynamic_loss_scale=True)
+        # else:
+        #     optimizer = FP16_Optimizer(optimizer, static_loss_scale=args.loss_scale)
+        model, optimizer = amp.initialize(model, optimizer, opt_level='O1')
     else:
         if args.from_pretrained:
             optimizer = BertAdam(
@@ -672,7 +673,10 @@ def training_step(args, batch, default_gpu, device, epochId, model, optimizer, r
            causal_prediction_v2t_loss + causal_prediction_t2v_loss
     s = t()
     if args.fp16:
-        optimizer.backward(loss)
+        # Nathan: updating according to https://nvidia.github.io/apex/amp.html#transition-guide-for-old-api-users
+        # optimizer.backward(loss)
+        with amp.scale_loss(loss, optimizer) as scaled_loss:
+            scaled_loss.backward()
     else:
         loss.backward()
     myprint(f'Calculating gradients took {t() - s}')
@@ -695,7 +699,8 @@ def training_step(args, batch, default_gpu, device, epochId, model, optimizer, r
         myprint(f"tboard logging took {t() - s}")
 
     if step % args.gradient_accumulation_steps == 0:
-        # if args.fp16: Nathan
+        # Nathan: not trying to imitate BertAdam, but just using FusedAdam, based on this discussion https://github.com/huggingface/transformers/issues/420
+        # if args.fp16:
         #     # modify learning rate with special warm up BERT uses
         #     # if args.fp16 is False, BertAdam is used that handles this automatically
         #     lr_this_step = args.learning_rate * warmup_linear(
@@ -715,11 +720,11 @@ def training_step(args, batch, default_gpu, device, epochId, model, optimizer, r
         myprint(f"zero-ing gradients took  {t() - s}")
         # global_step += 1 #Nathan
 
-    # # Checkpointing
-    # global last_checkpoint_time
-    # if t() - last_checkpoint_time > args.checkpoint_period:
-    #     last_checkpoint_time = t()
-    #     checkpoint(savePath, model, optimizer, rank, device, step)
+    # Checkpointing
+    global last_checkpoint_time
+    if t() - last_checkpoint_time > args.checkpoint_period:
+        last_checkpoint_time = t()
+        checkpoint(savePath, model, optimizer, rank, device)
 
 
 
@@ -758,17 +763,17 @@ def checkpoint(savePath, model, optimizer, rank, device):
                 os.remove(old_ckpt_path_name)
         myprint(f"\r\nDone storing model and optimizer checkpoint.")
 
-    # train_dataset.store_checkpoint() ONLY STORING HOW MUCH DONE, NOT WHAT DONE
-    # # Store where we are in the data
-    # delete the old file
-    old_path = get_step_file_path(savePath)
-    if old_path is not None:
-        os.remove(old_path)
-    # store new file
-    step_file = Path(savePath, f'rank_{get_rank()}_start_step_{step}.json')
-    with open(step_file, 'w') as f:
-        json.dump(step, f)
-        print(f"Stored done epochs in {step_file}")
+    # # train_dataset.store_checkpoint() ONLY STORING HOW MUCH DONE, NOT WHAT DONE
+    # # # Store where we are in the data
+    # # delete the old file
+    # old_path = get_step_file_path(savePath)
+    # if old_path is not None:
+    #     os.remove(old_path)
+    # # store new file
+    # step_file = Path(savePath, f'rank_{get_rank()}_start_step_{step}.json')
+    # with open(step_file, 'w') as f:
+    #     json.dump(step, f)
+    #     print(f"Stored done epochs in {step_file}")
 
     # Use a barrier() to make sure that process 1 loads the model after process
     # 0 saves it.
@@ -801,7 +806,7 @@ class TBlogger:
         print(f"logging file at: {log_dir}")
         self.logger = SummaryWriter(log_dir=log_dir)
 
-    def linePlot(self, step, val, split, key, xlabel="None"): #TODO only do for default GPU
+    def linePlot(self, step, val, split, key, xlabel="None"):
         self.logger.add_scalar(split + "/" + key, val, step)
 
 

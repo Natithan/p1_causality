@@ -10,10 +10,12 @@ import torch.nn as nn
 import torch.distributed as dist
 from torch.utils.data import DataLoader, Dataset, RandomSampler
 from torch.utils.data.distributed import DistributedSampler
+torch.multiprocessing.set_sharing_strategy('file_system')
 from pytorch_pretrained_bert.tokenization import BertTokenizer
 from devlbert.datasets import DatasetMapTrain, DatasetMapEval
 from devlbert.datasets._image_features_reader import ImageFeaturesH5Reader
 import pdb
+from cfg_train_tasks import FGS
 
 logger = logging.getLogger(__name__)
 
@@ -209,7 +211,8 @@ def LoadDatasets(args, task_cfg, ids, split='trainval'):
     for i, task_id in enumerate(ids):
         task = 'TASK' + task_id
         task_ids.append(task)
-        batch_size = task_cfg[task]['batch_size'] // args.gradient_accumulation_steps 
+        batch_size = task_cfg[task]['batch_size'] // args.gradient_accumulation_steps
+        batch_size = FGS.batch_size // args.gradient_accumulation_steps
         num_workers = args.num_workers
         if args.local_rank != -1:
             batch_size = int(batch_size / dist.get_world_size())

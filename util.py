@@ -24,14 +24,24 @@ IMAGE_DIR = "/cw/liir/NoCsBack/testliir/datasets/ConceptualCaptions/training"
 TIME = round(time())
 
 
+def word_to_id(word: str):
+    return CLASSES.index(word) if word in CLASSES else None
+
+
 def distributed(args) -> bool:
     return args.local_rank != -1
 
 
-def myprint(msg):
+def myprint(*msg):
     rank = get_rank()
     pre_msg = f'rank {rank} pid {os.getpid()},{strftime("%d %H:%M:%S")}: '
-    print(pre_msg + msg)
+    print(pre_msg, *msg)
+
+
+def my_maybe_print(msg):
+    rank = get_rank()
+    pre_msg = f'rank {rank} pid {os.getpid()},{strftime("%d %H:%M:%S")}: '
+    # print(pre_msg + msg)
 
 class MyLogger(Logger):
     def debug(self, msg, *args, **kwargs):
@@ -104,3 +114,13 @@ def get_rank() -> int:
     return torch.distributed.get_rank()
 
 
+def setup(rank, world_size):
+    os.environ['MASTER_ADDR'] = 'localhost'
+    os.environ['MASTER_PORT'] = '12355'
+
+    # initialize the process group
+    dist.init_process_group("nccl", rank=rank, world_size=world_size)
+
+
+def cleanup():
+    dist.destroy_process_group()

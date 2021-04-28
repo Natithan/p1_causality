@@ -28,7 +28,7 @@ FGS(sys.argv)
 # endregion
 
 
-def main():  # TODO make this (a lot) faster
+def main():
     ds = LMDBSerializer.load(OLD_10_100_LMDB_PATH, shuffle=False)
     ds.reset_state()
     NB_CLASSES = 1601

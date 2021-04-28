@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="WebServers">
+    <option name="servers">
+      <webServer id="005236af-25fd-4c9c-82f1-92c7d289133b" name="genius" url="">
+        <fileTransfer rootFolder="/data/leuven/336/vsc33642" accessType="SFTP" host="login.hpc.kuleuven.be" port="22" sshConfigId="ecf27d3d-cdc1-4fea-ac8a-f988bb13b679" sshConfig="genius" keyPair="true">
+          <advancedOptions>
+            <advancedOptions dataProtectionLevel="Private" passiveMode="true" shareSSLContext="true" />
+          </advancedOptions>
+        </fileTransfer>
+      </webServer>
+    </option>
+  </component>
+</project>

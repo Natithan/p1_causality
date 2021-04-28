@@ -28,7 +28,7 @@ import pdb
 from constants import ID2CLASS_PATH
 from typing import List
 from time import time as t, sleep
-from util import MyLogger, myprint, get_rank, get_world_size
+from util import MyLogger, my_maybe_print, get_rank, get_world_size
 from my_lmdb import get_core_ds
 from tensorpack.utils.serialize import dumps_once as dumps, loads_once as loads
 REGION_LEN = 36
@@ -141,7 +141,7 @@ class ConceptCapLoaderTrain(object):
             predict_feature=False,
             hard_negative=False,
             batch_size=512,
-            shuffle=False,
+            shuffle=True,
             num_workers=25,
             cache=50000,
             drop_last=False,
@@ -172,8 +172,8 @@ class ConceptCapLoaderTrain(object):
         caption_path = CAPTION_PATH
         # caption_path = "/mnt3/xuesheng/features_lmdb/CC/caption_train.json"
         print(f"Loading from{lmdb_files}")
-
-        ds = MyLMDBSerializer.load(lmdb_files, shuffle=True)
+        print("Shuffle: ", shuffle)
+        ds = MyLMDBSerializer.load(lmdb_files, shuffle=shuffle)
         self.num_dataset = len(ds)
         self.savePath = savePath
         preprocess_function = BertPreprocessBatch(
@@ -192,7 +192,8 @@ class ConceptCapLoaderTrain(object):
         # self.ds = td.PrefetchData(ds, 1)
         # ds = td.PrefetchDataZMQ(ds, num_workers) Nathan commenting out in hope of bypassing forking-debugger incompatibility
         # self.ds = td.BatchData(ds, batch_size)
-        ds = MyMultiProcessRunnerZMQ(ds, num_workers)
+        if num_workers > 0:
+            ds = MyMultiProcessRunnerZMQ(ds, num_workers)
         if mini:
             ds._size = MINI_SIZE
         self.ds = MyBatchData(ds, batch_size)
@@ -235,8 +236,8 @@ class ConceptCapLoaderTrain(object):
             to_yield = tuple(torch.tensor(data) for data in batch)
             between_yields_time = t() - s1
             concap_processing_time = t() - s
-            myprint(f"ENTIRE BETWEEN-YIELD TIME WAS  {between_yields_time}")
-            myprint(f"ConceptCapLoaderTrain time took {concap_processing_time}")
+            my_maybe_print(f"ENTIRE BETWEEN-YIELD TIME WAS  {between_yields_time}")
+            my_maybe_print(f"ConceptCapLoaderTrain time took {concap_processing_time}")
             yield to_yield
             s1 = t()
 
@@ -501,8 +502,8 @@ class NonResamplingConceptCapLoaderTrain(object):
             to_yield = tuple(torch.tensor(data) for data in batch)
             between_yields_time = t() - s1
             concap_processing_time = t() - s
-            myprint(f"ENTIRE BETWEEN-YIELD TIME WAS  {between_yields_time}")
-            myprint(f"ConceptCapLoaderTrain time took {concap_processing_time}")
+            my_maybe_print(f"ENTIRE BETWEEN-YIELD TIME WAS  {between_yields_time}")
+            my_maybe_print(f"ConceptCapLoaderTrain time took {concap_processing_time}")
             yield to_yield
             s1 = t()
 
@@ -727,7 +728,7 @@ class BertPreprocessBatch(object):
             causal_label_t,
             causal_label_v
         )
-        # myprint(f"BertPreprocessBatch call took {t() - s}")
+        # my_maybe_print(f"BertPreprocessBatch call took {t() - s}")
         return cur_tensors
 
     def random_cap(self, caption):
@@ -926,9 +927,12 @@ class BertPreprocessBatch(object):
 
         for i in range(num_boxes):
             prob = random.random()
-            # mask token with 15% probability
-            if prob < 0.15 and not self.visualization:
-                prob /= 0.15
+            # # mask token with 15% probability
+            # if prob < 0.15 and not self.visualization:
+            #     prob /= 0.15
+            # mask token with 15% probability CHANGED TO 0.3 as per instructions for second part
+            if prob < 0.3 and not self.visualization:
+                prob /= 0.3
 
                 # 80% randomly change token to mask token
                 if prob < 0.9:

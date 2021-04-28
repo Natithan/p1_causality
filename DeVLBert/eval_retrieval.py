@@ -1,3 +1,5 @@
+import warnings
+warnings.simplefilter(action='ignore', category=FutureWarning)
 import argparse
 import json
 import logging
@@ -5,7 +7,12 @@ import os
 import random
 from io import open
 import numpy as np
+from pretorch_util import get_free_gpus
+from util import myprint
 
+from devlbert.vilbert import VILBertForVLTasks
+
+os.environ['CUDA_VISIBLE_DEVICES'] = str(get_free_gpus()[0])
 from tensorboardX import SummaryWriter
 from tqdm import tqdm
 from bisect import bisect
@@ -17,8 +24,9 @@ import torch
 import torch.nn.functional as F
 import torch.nn as nn
 
+import devlbert
 from devlbert.task_utils import LoadDatasetEval, LoadLosses, ForwardModelsTrain, ForwardModelsVal, EvaluatingModel
-from devlbert.devlbert import DeVLBertForVLTasks, BertForMultiModalPreTraining
+from devlbert.devlbert import DeVLBertForVLTasks
 from devlbert.basebert import BaseBertForVLTasks
 
 import devlbert.utils as utils
@@ -106,13 +114,16 @@ def main():
         "--baseline", action="store_true", help="whether use single stream baseline."
     )
     parser.add_argument(
-        "--zero_shot", action="store_true", help="whether use single stream baseline."
+        "--vilbert", action="store_true", help="whether to use vilbert"
+    )
+    parser.add_argument(
+        "--zero_shot", action="store_true", help="whether to use vilbert instead of devlbert"
     )
     parser.add_argument(
         "--split", default="", type=str, help="which split to use."
     )
     parser.add_argument(
-        "--batch_size", default=1, type=int, help="which split to use."
+        "--batch_size", default=1, type=int, help="batch size."
     )
     args = parser.parse_args()
     with open('devlbert_tasks.yml', 'r') as f:
@@ -124,6 +135,8 @@ def main():
 
     if args.baseline:
         from pytorch_pretrained_bert.modeling import BertConfig
+    elif args.vilbert:
+        from devlbert.vilbert import BertConfig
     else:
         from devlbert.devlbert import BertConfig
 
@@ -175,14 +188,25 @@ def main():
         = LoadDatasetEval(args, task_cfg, args.tasks.split('-'))
 
     num_labels = max([dataset.num_labels for dataset in task_datasets_val.values()])
+    # if args.vilbert:
+    #     num_labels = 3129 # Nathan for compatibility with Vilbert, whose pretrained model was in a situation where all tasks where trained at the same time)
 
     config.fast_mode = True
-    if args.zero_shot:
-        model = BertForMultiModalPreTraining.from_pretrained(args.from_pretrained, config)
+    assert ('vilbert' in args.from_pretrained) == args.vilbert
+    if args.vilbert:
+        if args.zero_shot:
+            model = devlbert.vilbert.BertForMultiModalPreTraining.from_pretrained(args.from_pretrained, config)
+        else:
+            model = VILBertForVLTasks.from_pretrained(
+                args.from_pretrained, config, num_labels=num_labels, default_gpu=default_gpu
+            )
     else:
-        model = DeVLBertForVLTasks.from_pretrained(
-            args.from_pretrained, config, num_labels=num_labels, default_gpu=default_gpu
-        )
+        if args.zero_shot:
+            model = devlbert.devlbert.BertForMultiModalPreTraining.from_pretrained(args.from_pretrained, config)
+        else:
+            model = DeVLBertForVLTasks.from_pretrained(
+                args.from_pretrained, config, num_labels=num_labels, default_gpu=default_gpu
+            )
 
     task_losses = LoadLosses(args, task_cfg, args.tasks.split('-'))
     model.to(device)
@@ -270,14 +294,15 @@ def main():
         print("************************************************")
         print("Final r1:%.3f, r5:%.3f, r10:%.3f, mder:%.3f, meanr:%.3f" % (r1, r5, r10, medr, meanr))
         print("************************************************")
-
         if args.split:
             json_path = os.path.join(savePath, args.split)
         else:
             json_path = os.path.join(savePath, task_cfg[task_id]['val_split'])
         json.dump(results, open(json_path + '_result.json', 'w'))
         json.dump(others, open(json_path + '_others.json', 'w'))
+        json.dump((r1, r5, r10, medr, meanr), open(json_path + '_r_scores.json', 'w'))
 
 
 if __name__ == "__main__":
     main()
+

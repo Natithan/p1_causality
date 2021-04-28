@@ -9,16 +9,21 @@ import numpy as np
 import _pickle as cPickle
 
 from pytorch_pretrained_bert.tokenization import BertTokenizer
-from ._image_features_reader import ImageFeaturesH5Reader
+from util import myprint, get_rank
+
+# from cfg_train_tasks import FGS
+from ._image_features_reader import ImageFeaturesH5Reader, MyImageFeaturesH5Reader
 import jsonlines
 import sys
 import pdb
+import torch.distributed as dist
+
 
 def assert_eq(real, expected):
     assert real == expected, "%s (true) vs %s (expected)" % (real, expected)
 
 def _load_annotations(annotations_jsonpath, task):
-
+    myprint(f"Loading from {annotations_jsonpath} for task {task}")
     with jsonlines.open(annotations_jsonpath) as reader:
 
         # Build an index which maps image id with a list of caption annotations.
@@ -74,7 +79,23 @@ class RetreivalDataset(Dataset):
             self.train_imgId2pool = {imageId:i for i, imageId in enumerate(self.train_image_list)}
 
         cache_path = os.path.join(dataroot, "cache", task + '_' + split + '_' + str(max_seq_length)+'.pkl')
-
+        default_gpu = get_rank() == 0
+        # if FGS.mini:
+        #     FULL_SIZE = len(self._entries)
+        #     MINI_SIZE = int(FGS.mini_fraction * FULL_SIZE)
+        #     myprint("LOADING MINI DATA")
+        #     old_cache_path = cache_path
+        #     cache_path = os.path.join(dataroot, "cache", task + '_' + split + f'_mini_{FGS.mini_fraction}_' + str(max_seq_length) + '.pkl')
+        #     if not os.path.exists(cache_path):
+        #         self._entries = cPickle.load(open(old_cache_path, "rb"))[:MINI_SIZE]
+        #         if default_gpu:
+        #             myprint(f"Dumping mini data in cache at {cache_path}")
+        #             cPickle.dump(self._entries, open(cache_path, 'wb'))
+        #             myprint(f"Waiting in front of barrier after dump.")
+        #             dist.barrier()
+        #             myprint(f"Got past barrier")
+        #     self.image_id_list = [e['image_id'] for e in self._entries]
+        #     self.imgid2entry = {i:e for i,e in self.imgid2entry.items() if i in self.image_id_list}
         if not os.path.exists(cache_path):
             self.tokenize()
             self.tensorize()
@@ -172,8 +193,10 @@ class RetreivalDataset(Dataset):
             # sample a random image:
             img_id3 = random.choice(self.image_id_list)
             if img_id3 != image_id: break        
-
-        features3, num_boxes3, boxes3, _ = self._image_features_reader[img_id3]
+        try:
+            features3, num_boxes3, boxes3, _ = self._image_features_reader[img_id3]
+        except ValueError:
+            print(5)
         image_mask3 = [1] * (int(num_boxes3))
 
         mix_num_boxes3 = min(int(num_boxes3), self._max_region_num)
@@ -229,6 +252,144 @@ class RetreivalDataset(Dataset):
 
     def __len__(self):
         return len(self._entries)
+
+# Nathan: for loading from flickr30k-preprocessed lmdb file in a way that includes cls probabilities
+class MyRetreivalDataset(Dataset):
+    def __init__(
+            self,
+            task: str,
+            dataroot: str,
+            annotations_jsonpath: str,
+            split: str,
+            tokenizer: BertTokenizer,
+            padding_index: int = 0,
+            max_seq_length: int = 30,
+            max_region_num: int = 37,
+    ):
+        # All the keys in `self._entries` would be present in `self._image_features_reader`
+
+        self._entries, self.imgid2entry = _load_annotations(annotations_jsonpath, task)
+        self.image_id_list = [*self.imgid2entry]
+
+        self._image_features_reader = MyImageFeaturesH5Reader('/cw/working-gimli/nathan/downstream_data/datasets/flickr30k/flickr30k_resnet101_faster_rcnn_genome.lmdb',in_memory=True)
+        self._tokenizer = tokenizer
+        self.num_labels = 1
+        self._split = split
+        self._padding_index = padding_index
+        self._max_region_num = max_region_num
+        self._max_seq_length = max_seq_length
+
+        if self._split == 'train':
+            image_info = cPickle.load(open(os.path.join(dataroot, 'hard_negative.pkl'), 'rb'))
+            for key, value in image_info.items():
+                setattr(self, key, value)
+            self.train_imgId2pool = {imageId: i for i, imageId in enumerate(self.train_image_list)}
+
+        cache_path = os.path.join(dataroot, "cache", task + '_' + split + '_' + str(max_seq_length) + '.pkl')
+        default_gpu = get_rank() == 0
+        # if FGS.mini:
+        #     FULL_SIZE = len(self._entries)
+        #     MINI_SIZE = int(FGS.mini_fraction * FULL_SIZE)
+        #     myprint("LOADING MINI DATA")
+        #     old_cache_path = cache_path
+        #     cache_path = os.path.join(dataroot, "cache", task + '_' + split + f'_mini_{FGS.mini_fraction}_' + str(max_seq_length) + '.pkl')
+        #     if not os.path.exists(cache_path):
+        #         self._entries = cPickle.load(open(old_cache_path, "rb"))[:MINI_SIZE]
+        #         if default_gpu:
+        #             myprint(f"Dumping mini data in cache at {cache_path}")
+        #             cPickle.dump(self._entries, open(cache_path, 'wb'))
+        #             myprint(f"Waiting in front of barrier after dump.")
+        #             dist.barrier()
+        #             myprint(f"Got past barrier")
+        #     self.image_id_list = [e['image_id'] for e in self._entries]
+        #     self.imgid2entry = {i:e for i,e in self.imgid2entry.items() if i in self.image_id_list}
+        if not os.path.exists(cache_path):
+            self.tokenize()
+            self.tensorize()
+            cPickle.dump(self._entries, open(cache_path, 'wb'))
+        else:
+            print('loading entries from %s' % (cache_path))
+            self._entries = cPickle.load(open(cache_path, "rb"))
+
+    def tokenize(self):
+        """Tokenizes the captions.
+
+        This will add caption_tokens in each entry of the dataset.
+        -1 represents nil, and should be treated as padding_idx in embedding.
+        """
+        for entry in self._entries:
+            sentence_tokens = self._tokenizer.tokenize(entry["caption"])
+            sentence_tokens = ["[CLS]"] + sentence_tokens + ["[SEP]"]
+
+            tokens = [
+                self._tokenizer.vocab.get(w, self._tokenizer.vocab["[UNK]"])
+                for w in sentence_tokens
+            ]
+            tokens = tokens[:self._max_seq_length]
+            segment_ids = [0] * len(tokens)
+            input_mask = [1] * len(tokens)
+
+            if len(tokens) < self._max_seq_length:
+                # Note here we pad in front of the sentence
+                padding = [self._padding_index] * (self._max_seq_length - len(tokens))
+                tokens = tokens + padding
+                input_mask += padding
+                segment_ids += padding
+
+            assert_eq(len(tokens), self._max_seq_length)
+            entry["token"] = tokens
+            entry["input_mask"] = input_mask
+            entry["segment_ids"] = segment_ids
+
+    def tensorize(self):
+
+        for entry in self._entries:
+            token = torch.from_numpy(np.array(entry["token"]))
+            entry["token"] = token
+
+            input_mask = torch.from_numpy(np.array(entry["input_mask"]))
+            entry["input_mask"] = input_mask
+
+            segment_ids = torch.from_numpy(np.array(entry["segment_ids"]))
+            entry["segment_ids"] = segment_ids
+
+    def __getitem__(self, index):
+        entry = self._entries[index]
+        image_id = entry["image_id"]
+
+        features, num_boxes, boxes, _, cls_probs = self._image_features_reader[image_id]
+
+        mix_num_boxes = min(int(num_boxes), self._max_region_num)
+        mix_boxes_pad = np.zeros((self._max_region_num, 5))
+        mix_features_pad = np.zeros((self._max_region_num, 2048))
+        mix_cls_probs_pad = np.zeros((self._max_region_num - 1, 1601))
+
+        image_mask = [1] * (int(mix_num_boxes))
+        while len(image_mask) < self._max_region_num:
+            image_mask.append(0)
+
+        mix_boxes_pad[:mix_num_boxes] = boxes[:mix_num_boxes]
+        mix_features_pad[:mix_num_boxes] = features[:mix_num_boxes]
+        mix_cls_probs_pad[:mix_num_boxes - 1] = cls_probs[:mix_num_boxes - 1]
+
+        features1 = torch.tensor(mix_features_pad).float()
+        cls_probs1 = torch.tensor(mix_cls_probs_pad).float()
+        image_mask1 = torch.tensor(image_mask).long()
+        spatials1 = torch.tensor(mix_boxes_pad).float()
+
+        caption1 = entry["token"]
+        input_mask1 = entry["input_mask"]
+        segment_ids1 = entry["segment_ids"]
+        # negative samples.
+        # 1: correct one, 2: random caption wrong, 3: random image wrong. 4: hard image wrong.
+        co_attention_mask = torch.zeros((4, self._max_region_num, self._max_seq_length))
+        target = 0
+
+        return features1, spatials1, image_mask1, caption1, input_mask1, segment_ids1, image_id, cls_probs1
+
+    def __len__(self):
+        return len(self._entries)
+
 
 def _load_annotationsVal(annotations_jsonpath, task):
 

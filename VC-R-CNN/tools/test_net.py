@@ -25,6 +25,7 @@ except ImportError:
 
 
 def main():
+    #region parser stuff
     parser = argparse.ArgumentParser(description="PyTorch Object Detection Inference")
     parser.add_argument(
         "--config-file",
@@ -46,7 +47,7 @@ def main():
     )
 
     args = parser.parse_args()
-
+    #endregion
     num_gpus = int(os.environ["WORLD_SIZE"]) if "WORLD_SIZE" in os.environ else 1
     distributed = num_gpus > 1
 

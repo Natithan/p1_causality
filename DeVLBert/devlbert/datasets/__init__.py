@@ -21,15 +21,15 @@ __all__ = [
 DatasetMapTrain = {
 				   'TASK0': VQAClassificationDataset,
 				   'TASK1': VCRDataset,
-				   'TASK2': VCRDataset,				   
+				   'TASK2': VCRDataset,
 				   'TASK3': RetreivalDataset,
 				   'TASK4': ReferExpressionDataset,
-				   }		
+				   }
 
 DatasetMapEval = {
 				 'TASK0': VQAClassificationDataset,
 				 'TASK1': VCRDataset,
-				 'TASK2': VCRDataset,				   
+				 'TASK2': VCRDataset,
 				 'TASK3': RetreivalDatasetVal,
-				 'TASK4': ReferExpressionDataset,			   
+				 'TASK4': ReferExpressionDataset,
 				}

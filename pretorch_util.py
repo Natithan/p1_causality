@@ -11,6 +11,8 @@ def get_free_gpus():
     return free_gpus
 
 
+
+
 def rank_to_device(rank):
     '''
     For when not all GPUs on the device can be used

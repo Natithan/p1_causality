@@ -2,16 +2,25 @@ import os
 import json
 import _pickle as cPickle
 import logging
-
+from time import time as t
 import numpy as np
 import torch
 from torch.utils.data import Dataset
+import torch.distributed as dist
 from pytorch_pretrained_bert.tokenization import BertTokenizer
+from util import myprint
 
 from ._image_features_reader import ImageFeaturesH5Reader
 import pdb
 logger = logging.getLogger(__name__)  # pylint: disable=invalid-name
 os.environ["HDF5_USE_FILE_LOCKING"] = "FALSE"
+from absl import flags
+import sys
+
+# FGS = flags.FLAGS
+# flags.DEFINE_bool("mini", False, "")
+# flags.DEFINE_float("mini_fraction",1/120,"Fraction of data to consider when doing mini run")
+# FGS(sys.argv)
 
 def assert_eq(real, expected):
     assert real == expected, "%s (true) vs %s (expected)" % (real, expected)
@@ -115,6 +124,21 @@ class VQAClassificationDataset(Dataset):
             os.makedirs(os.path.join(dataroot, "cache"))
 
         cache_path = os.path.join(dataroot, "cache", task + '_' + split + '_' + str(max_seq_length)+'.pkl')
+        # default_gpu = FGS.local_rank == 0
+        # if FGS.mini:
+        #     FULL_SIZE = 655111
+        #     MINI_SIZE = int(FGS.mini_fraction * FULL_SIZE)
+        #     myprint("LOADING MINI DATA")
+        #     old_cache_path = cache_path
+        #     cache_path = os.path.join(dataroot, "cache", task + '_' + split + f'_mini_{FGS.mini_fraction}_' + str(max_seq_length) + '.pkl')
+        #     if not os.path.exists(cache_path):
+        #         self.entries = cPickle.load(open(old_cache_path, "rb"))[:MINI_SIZE]
+        #         if default_gpu:
+        #             myprint(f"Dumping mini data in cache at {cache_path}")
+        #             cPickle.dump(self.entries, open(cache_path, 'wb'))
+        #             myprint(f"Waiting in front of barrier after dump.")
+        #             dist.barrier()
+        #             myprint(f"Got past barrier")
         if not os.path.exists(cache_path):
         # if True:
             self.entries = _load_dataset(dataroot, split)
@@ -123,10 +147,13 @@ class VQAClassificationDataset(Dataset):
             cPickle.dump(self.entries, open(cache_path, 'wb'))
         else:
             logger.info("Loading from %s" %cache_path)
+            s = t()
             self.entries = cPickle.load(open(cache_path, "rb"))
+            logger.info(f"Loaded from {cache_path} in {t() - s} seconds")
         # print(len(self.entries), "!!!!!!!!!!!!!!!!!!!!!!") # test 447793 val 214354 minval3000
         # _image_entries = [temp["image_id"] for temp in self.entries]
         # np.save("./vqa/image_entries(lis3000)vilbert", _image_entries)
+
     def tokenize(self, max_length=16):
         """Tokenizes the questions.
 

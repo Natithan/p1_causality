@@ -72,7 +72,7 @@ from tensorpack.dataflow.base import DataFlow, DataFlowReentrantGuard
 from tensorpack.dataflow import BatchData, MultiProcessRunnerZMQ
 from tensorpack.dataflow.common import MapData
 from tensorpack.dataflow.format import LMDBData
-from util import get_rank, get_world_size, MyLogger, myprint
+from util import get_rank, get_world_size, MyLogger, my_maybe_print
 import glob
 import logging
 
@@ -130,12 +130,12 @@ class MyBatchData(BatchData):
             times.append(t() - sd)
             holder.append(data)
             if len(holder) == self.batch_size:
-                myprint(f"BatchData iteration took {t() - s}")
-                myprint(f"Iterating through {self.batch_size} elements of {self.ds} took {sum(times)}")
+                my_maybe_print(f"BatchData iteration took {t() - s}")
+                my_maybe_print(f"Iterating through {self.batch_size} elements of {self.ds} took {sum(times)}")
                 times = []
                 ss = t()
                 aggregated_batch = BatchData.aggregate_batch(holder, self.use_list)
-                myprint(f"BatchData.aggregate_batch took {t() - ss}")
+                my_maybe_print(f"BatchData.aggregate_batch took {t() - ss}")
                 yield aggregated_batch
                 s = t()
                 del holder[:]
@@ -324,18 +324,29 @@ class MyLMDBData(LMDBData):
         y_times = []
         BATCH_SIZE = 96
         with self._guard:
-            for j, (txn, keys) in enumerate(zip(self._txns, self.keys_list)):
-                for i, k in enumerate(keys):
-                    v = txn.get(k)
-                    y_times.append(t() - ys)
-                    if i % BATCH_SIZE == 0:
-                        myprint(f"MyLMDBData between-yield time for {len(y_times)} elements was {sum(y_times)}")
-                        y_times = []
-                    yield [k, v]
-                    ys = t()
+            if not self._shuffle:
+                for j, txn in enumerate(self._txns):
+                    c = txn.cursor()
+                    for i, (k, v) in enumerate(c):
+                        if (i + self.rank - 1) % self.nb_processes == 0:
+                            if k != b'__keys__':
+                                yield [k, v]
+            else:
+                for j, (txn, keys) in enumerate(zip(self._txns, self.keys_list)):
+                    for i, k in enumerate(keys):
+                        v = txn.get(k)
+                        y_times.append(t() - ys)
+                        if i % BATCH_SIZE == 0:
+                            my_maybe_print(f"MyLMDBData between-yield time for {len(y_times)} elements was {sum(y_times)}")
+                            y_times = []
+                        yield [k, v]
+                        ys = t()
 
     def __len__(self):
-        return sum(len(ks) for ks in self.keys_list)
+        if self._shuffle:
+            return sum(len(ks) for ks in self.keys_list)
+        else:
+            return sum([int(s // self.nb_processes) for s in self._sizes])
 
 
 
@@ -590,7 +601,7 @@ class MyNonResamplingLMDBData(LMDBData):
         with open(path, 'rb') as f:
             self.start_key_idxs = pickle.load(f)
 
-        myprint(f"Starting at indexes {[sk for sk in self.start_key_idxs]} out of {[len(ks) for ks in self.keys_list]}")
+        my_maybe_print(f"Starting at indexes {[sk for sk in self.start_key_idxs]} out of {[len(ks) for ks in self.keys_list]}")
 
     def get_existing_key_idxs_file_path(self):
         res = self.get_key_idxs_path_list()
@@ -604,7 +615,7 @@ class MyNonResamplingLMDBData(LMDBData):
         return res
 
     def store_checkpoint(self):
-        myprint(self.current_key_idx_list)
+        my_maybe_print(self.current_key_idx_list)
         self.dump_idxs_with_value_in_name(self.current_key_idx_list)
 
     def __iter__(self):
@@ -622,7 +633,7 @@ class MyNonResamplingLMDBData(LMDBData):
                     v = txn.get(k)
                     y_times.append(t() - ys)
                     if i % BATCH_SIZE == 0:
-                        myprint(f"MyLMDBData between-yield time for {BATCH_SIZE} elements was {sum(y_times)}")
+                        my_maybe_print(f"MyLMDBData between-yield time for {BATCH_SIZE} elements was {sum(y_times)}")
                         y_times = []
                     yield [k, v]
                     ys = t()
