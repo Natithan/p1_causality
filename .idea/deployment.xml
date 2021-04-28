@@ -120,6 +120,9 @@
           <mappings>
             <mapping deploy="/" local="$PROJECT_DIR$" />
           </mappings>
+          <excludedPaths>
+            <excludedPath path="/p1_causality/DeVLBert/tools/DownloadConcptualCaption/Train_GCC-training.tsv" />
+          </excludedPaths>
         </serverdata>
       </paths>
       <paths name="genius">

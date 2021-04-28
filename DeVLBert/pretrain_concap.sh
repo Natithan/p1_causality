@@ -1,0 +1,14 @@
+python train_concap.py \
+  --trainer.accelerator 'ddp' \
+  --trainer.gpus -1 \
+  --trainer.num_nodes 1 \
+  --trainer.max_epochs 24 \
+  --from_pretrained bert-base-uncased \
+  --bert_model bert-base-uncased \
+  --config_file config/bert_base_6layer_6conect.json \
+  --learning_rate 1e-4 \
+  --train_batch_size 64 \
+  --save_name devlbert_base \
+  --distributed \
+  --checkpoint_period 100 \
+  --continue_training
