@@ -16,7 +16,7 @@
 """PyTorch BERT model."""
 from pytorch_pretrained_bert.optimization import BertAdam
 import pytorch_lightning as pl
-from deepspeed.ops.adam import FusedAdam
+# from deepspeed.ops.adam import FusedAdam
 import copy
 from time import sleep
 
@@ -1503,8 +1503,11 @@ class Causal_v(nn.Module):
         self.Wz = nn.Linear(2048, 1024)
         # self.dic_z = torch.tensor(np.load("./dic/dic_v.npy"), dtype=torch.float).cuda() # Nathan
         # self.prior = torch.tensor(np.load("./dic/prior_v.npy"), dtype=torch.float).cuda()
-        self.dic_z = torch.tensor(np.load("./dic/dic_v.npy"), dtype=torch.float).to(Wy.device)
-        self.prior = torch.tensor(np.load("./dic/prior_v.npy"), dtype=torch.float).to(Wy.device)
+
+        # Following  https://pytorch-lightning.readthedocs.io/en/latest/advanced/multi_gpu.html#init-tensors-using-type-as-and-register-buffer
+        self.register_buffer("dic_z", torch.tensor(np.load("./dic/dic_v.npy"), dtype=torch.float))
+        self.register_buffer("prior", torch.tensor(np.load("./dic/prior_v.npy"), dtype=torch.float))
+
         nn.init.normal_(self.Wy.weight, std=0.02)
         nn.init.normal_(self.Wz.weight, std=0.02)
         nn.init.constant_(self.Wy.bias, 0)
@@ -1533,8 +1536,10 @@ class Causal_t(nn.Module):
         self.Wz = nn.Linear(768, 768)
         # self.dic_z = torch.tensor(np.load("./dic/dic_t.npy"), dtype=torch.float).cuda()
         # self.prior = torch.tensor(np.load("./dic/prior_t.npy"), dtype=torch.float).cuda() # Nathan
-        self.dic_z = torch.tensor(np.load("./dic/dic_t.npy"), dtype=torch.float).to(self.Wy.device)
-        self.prior = torch.tensor(np.load("./dic/prior_t.npy"), dtype=torch.float).to(self.Wy.device)
+
+        # Following  https://pytorch-lightning.readthedocs.io/en/latest/advanced/multi_gpu.html#init-tensors-using-type-as-and-register-buffer
+        self.register_buffer("dic_z", torch.tensor(np.load("./dic/dic_t.npy"), dtype=torch.float))
+        self.register_buffer("prior", torch.tensor(np.load("./dic/prior_t.npy"), dtype=torch.float))
         nn.init.normal_(self.Wy.weight, std=0.02)
         nn.init.normal_(self.Wz.weight, std=0.02)
         nn.init.constant_(self.Wy.bias, 0)
@@ -1563,8 +1568,9 @@ class Causal_t2v(nn.Module):
         self.t2v = nn.Linear(2048, 768)
         # self.dic_z = torch.tensor(np.load("./dic/dic_v.npy"), dtype=torch.float).cuda()
         # self.prior = torch.tensor(np.load("./dic/prior_v.npy"), dtype=torch.float).cuda()
-        self.dic_z = torch.tensor(np.load("./dic/dic_v.npy"), dtype=torch.float).to(self.Wy.device)
-        self.prior = torch.tensor(np.load("./dic/prior_v.npy"), dtype=torch.float).to(self.Wy.device)
+        # Following  https://pytorch-lightning.readthedocs.io/en/latest/advanced/multi_gpu.html#init-tensors-using-type-as-and-register-buffer
+        self.register_buffer("dic_z", torch.tensor(np.load("./dic/dic_v.npy"), dtype=torch.float))
+        self.register_buffer("prior", torch.tensor(np.load("./dic/prior_v.npy"), dtype=torch.float))
         nn.init.normal_(self.Wy.weight, std=0.02)
         nn.init.normal_(self.Wz.weight, std=0.02)
         nn.init.constant_(self.Wy.bias, 0)
@@ -1594,8 +1600,9 @@ class Causal_v2t(nn.Module):
         self.v2t = nn.Linear(768, 1024)
         # self.dic_z = torch.tensor(np.load("./dic/dic_t.npy"), dtype=torch.float).cuda()
         # self.prior = torch.tensor(np.load("./dic/prior_t.npy"), dtype=torch.float).cuda()
-        self.dic_z = torch.tensor(np.load("./dic/dic_t.npy"), dtype=torch.float).to(self.Wy.device)
-        self.prior = torch.tensor(np.load("./dic/prior_t.npy"), dtype=torch.float).to(self.Wy.device)
+        # Following  https://pytorch-lightning.readthedocs.io/en/latest/advanced/multi_gpu.html#init-tensors-using-type-as-and-register-buffer
+        self.register_buffer("dic_z", torch.tensor(np.load("./dic/dic_t.npy"), dtype=torch.float))
+        self.register_buffer("prior", torch.tensor(np.load("./dic/prior_t.npy"), dtype=torch.float))
         nn.init.normal_(self.Wy.weight, std=0.02)
         nn.init.normal_(self.Wz.weight, std=0.02)
         nn.init.constant_(self.Wy.bias, 0)
@@ -1793,7 +1800,7 @@ class BertForMultiModalPreTraining(BertPreTrainedModel, pl.LightningModule):
 
         # region tboard logging
         myprint(f"tboard logging ...")
-        self.log("loss", loss.item(), )
+        self.log("loss", loss.item())
         self.log("masked_loss_t", masked_loss_t.item())
         self.log("masked_loss_v", masked_loss_v.item())
         self.log("next_sentence_loss", next_sentence_loss.item())
@@ -1807,12 +1814,72 @@ class BertForMultiModalPreTraining(BertPreTrainedModel, pl.LightningModule):
         return {'loss': loss}
 
     def configure_optimizers(self):
+        bert_weight_name = json.load(open("config/" + "bert-base-uncased_weight_name.json", "r"))
+
+        no_decay = ["bias", "LayerNorm.bias", "LayerNorm.weight"]
+        if self.args.freeze != -1:
+            bert_weight_name_filtered = []
+            for name in bert_weight_name:
+                if 'embeddings' in name:
+                    bert_weight_name_filtered.append(name)
+                elif 'encoder' in name:
+                    layer_num = name.split('.')[2]
+                    if int(layer_num) <= self.args.freeze:
+                        bert_weight_name_filtered.append(name)
+
+            for key, value in dict(self.named_parameters()).items():
+                if key[12:] in bert_weight_name_filtered:
+                    value.requires_grad = False
+        if not self.args.from_pretrained:
+            param_optimizer = list(self.named_parameters())
+            optimizer_grouped_parameters = [
+                {
+                    "params": [
+                        p for n, p in param_optimizer if not any(nd in n for nd in no_decay)
+                    ],
+                    "weight_decay": 0.01,
+                },
+                {
+                    "params": [
+                        p for n, p in param_optimizer if any(nd in n for nd in no_decay)
+                    ],
+                    "weight_decay": 0.0,
+                },
+            ]
+        else:
+            optimizer_grouped_parameters = []
+            for key, value in dict(self.named_parameters()).items():
+                if value.requires_grad:
+                    # if key[12:] in bert_weight_name:
+                    if key[5:] in bert_weight_name:  # Nathan: starts with "bert.", guess the 12: was for an old version
+                        lr = self.args.learning_rate * 0.1
+                    else:
+                        lr = self.args.learning_rate
+
+                    if any(nd in key for nd in no_decay):
+                        optimizer_grouped_parameters += [
+                            {"params": [value], "lr": lr, "weight_decay": 0.01}
+                        ]
+
+                    if not any(nd in key for nd in no_decay):
+                        optimizer_grouped_parameters += [
+                            {"params": [value], "lr": lr, "weight_decay": 0.0}
+                        ]
+            assert len(list(self.named_parameters())) == len(optimizer_grouped_parameters)
+
+        num_train_optimization_steps = (
+                int(
+                    len(self.train_dataloader())
+                    / self.args.gradient_accumulation_steps
+                )
+                * self.args.num_train_epochs
+        )
 
         optimizer = BertAdam(
             optimizer_grouped_parameters,
             lr=self.args.learning_rate,
-            warmup=self.warmup_proportion,
-            t_total=self.num_train_optimization_steps,
+            warmup=self.args.warmup_proportion,
+            t_total=num_train_optimization_steps,
         )
         return optimizer
         # return torch.optim.Adam(self.parameters(),lr=self.args.learning_rate)

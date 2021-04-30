@@ -5,12 +5,15 @@ import glob
 import warnings
 from time import sleep
 import os
+
+import yaml
 from pretorch_util import get_free_gpus
+from pytorch_lightning.plugins import DDPPlugin
 
 os.environ['CUDA_VISIBLE_DEVICES'] = ",".join([str(i) for i in get_free_gpus()])
 warnings.simplefilter(action='ignore', category=FutureWarning)
 warnings.simplefilter(action='ignore', category=UserWarning)
-from devlbert.datasets.concept_cap_dataset import get_core_ds
+# from devlbert.datasets.concept_cap_dataset import get_core_ds
 import argparse
 import json
 import logging
@@ -23,8 +26,8 @@ from datetime import datetime
 from pathlib import Path
 import pytorch_lightning as pl
 from pytorch_lightning import Trainer
-from pytorch_lightning.callbacks import LearningRateMonitor
-
+from pytorch_lightning.callbacks import LearningRateMonitor, ModelCheckpoint
+from pytorch_lightning.utilities.seed import seed_everything
 import torch.multiprocessing as mp
 
 START = t()
@@ -62,9 +65,31 @@ MASTER_RANK = 0
 # endregion
 
 def main():
-    # region Parser stuff
+
     parser = argparse.ArgumentParser()
+    parser = add_program_argparse_args(parser)
+
+    args = parser.parse_args()
+
+    if args.save_name is not '':
+        timeStamp = args.save_name
+    else:
+        timeStamp = strftime("%d-%b-%y-%X-%a")
+        timeStamp += "_{:0>6d}".format(random.randint(0, 10e6))
+    savePath = os.path.join(args.output_dir, timeStamp)
+    if not os.path.exists(savePath):
+        os.makedirs(savePath)
+    myprint("Spawning process per GPU")
+    mp.spawn(main_single_process,
+             args=(args, savePath),
+             nprocs=args.world_size,
+             join=True)
+
+
+def add_program_argparse_args(parser):
     # Required parameters
+    parser.add_argument('--config', help="configuration file *.yml. Can be overriden with direct args",
+                        type=str, required=False, default='config/pretrain_concap_devlbert.yml')
     parser.add_argument(
         "--train_file",
         default="data/training",
@@ -239,11 +264,11 @@ def main():
         action="store_true",
         help="Whether to shuffle the concap data"
     )
-    parser.add_argument(
-        "--gpus",
-        nargs='+', type=int,
-        help="which gpus to consider"
-    )
+    # parser.add_argument(
+    #     "--gpus",
+    #     nargs='+', type=int,
+    #     help="which gpus to consider"
+    # )
     parser.add_argument(
         "--mini", action="store_true", help="Whether to train on mini data, just to test the whole training loop"
     )
@@ -256,33 +281,13 @@ def main():
     parser.add_argument(
         "--debug", action="store_true", help="If true sets logging level to debug"
     )
-    # endregion
-
-    # add all the available trainer options to argparse
-    # ie: now --gpus --num_nodes ... --fast_dev_run all work in the cli
-    parser = Trainer.add_argparse_args(parser)
-
-    args = parser.parse_args()
-
-    if args.save_name is not '':
-        timeStamp = args.save_name
-    else:
-        timeStamp = strftime("%d-%b-%y-%X-%a")
-        timeStamp += "_{:0>6d}".format(random.randint(0, 10e6))
-    savePath = os.path.join(args.output_dir, timeStamp)
-    if not os.path.exists(savePath):
-        os.makedirs(savePath)
-    myprint("Spawning process per GPU")
-    mp.spawn(main_single_process,
-             args=(args, savePath),
-             nprocs=args.world_size,
-             join=True)
+    return parser
 
 
 def main_single_process(rank, args, savePath):
     device = torch.device("cuda", rank)
     myprint("Entered main_single_process")
-    # setup(rank=rank, world_size=args.world_size)
+    setup(rank=rank,world_size=args.world_size)
     s = t()
     if args.debug:
         logger.setLevel(logging.DEBUG)
@@ -327,6 +332,7 @@ def main_single_process(rank, args, savePath):
         args.bert_model, do_lower_case=args.do_lower_case
     )
 
+
     train_dataset = ConceptCapLoaderTrain(
         tokenizer,
         seq_len=args.max_seq_length,
@@ -365,7 +371,7 @@ def main_single_process(rank, args, savePath):
         config.v_target_size = 1601
         config.predict_feature = False
     if args.from_pretrained:
-        model = DDP(BertForMultiModalPreTraining.from_pretrained(args.from_pretrained, config, args=args).to(device),
+        model = DDP(BertForMultiModalPreTraining.from_pretrained(args.from_pretrained, config).to(device),
                     device_ids=[device])
 
         # Load correct epoch
@@ -393,6 +399,7 @@ def main_single_process(rank, args, savePath):
             # print("SLEEPING FOR DEBUGGING")
             # sleep(10000000)
 
+
             # # Load correct within-epoch step
             # step_file = get_step_file_path(savePath)
             # if step_file is not None:
@@ -404,7 +411,7 @@ def main_single_process(rank, args, savePath):
 
     # Nathan: updating according to https://nvidia.github.io/apex/amp.html#transition-guide-for-old-api-users
     # if args.fp16:
-    # model.half() # replacing with "model, optimizer = amp.initialize(mode, optimizer,opt_level='O2')" later on
+        # model.half() # replacing with "model, optimizer = amp.initialize(mode, optimizer,opt_level='O2')" later on
 
     # elif n_gpu > 1:
     no_decay = ["bias", "LayerNorm.bias", "LayerNorm.weight"]
@@ -525,159 +532,165 @@ def main_single_process(rank, args, savePath):
             json.dump(epochId, f)
             print(f"Stored done epochs in {epoch_file}")
 
-        # # Getting per-epoch progress bar iterator for main process
-        # basic_iterator = enumerate(train_dataset, 1)
-        # iterator = tqdm(basic_iterator,
-        #                 total=len(train_dataset)) \
-        #     if default_gpu else basic_iterator
+        # Getting per-epoch progress bar iterator for main process
+        basic_iterator = enumerate(train_dataset, 1)
+        iterator = tqdm(basic_iterator,
+                        total=len(train_dataset)) \
+            if default_gpu else basic_iterator
         # train_dataset.
-        lr_monitor = LearningRateMonitor(logging_interval='step')
-        trainer = pl.Trainer(args, callbacks=[lr_monitor])
-        trainer.fit(model, train_dataloader=train_dataset)
-    #     s = t()
-    #     first = True
-    #     myprint(f"Loading first batch ...")
-    #     for step, batch in iterator:
-    #         if first:
-    #             myprint(f"Loading first batch took {t() - s} seconds")
-    #         else:
-    #             myprint(f"Loading non-first batch took {t() - s} seconds")
-    #         first = False
-    #         s = t()
-    #         training_step(args, batch, default_gpu, device,
-    #                       epochId, model, optimizer, rank, savePath,
-    #                       step, train_dataset, viz)
-    #         myprint(f"ENTIRE TRAIN STEP TOOK {t() - s} SECONDS")
-    #         s = t()
-    #     # Do the evaluation
-    #     # torch.set_grad_enabled(False)
-    #     # start_t = timer()
-    #     # numBatches = len(validation_dataset)
-    #     # eval_masked_loss_t = 0
-    #     # eval_masked_loss_v = 0
-    #     # eval_next_sentence_loss = 0
-    #     # eval_total_loss = 0
-    #     # eval_causal_loss = 0
-    #     #
-    #     # model.eval()
-    #     # for step, batch in enumerate(validation_dataset, 1):
-    #     #     batch = tuple(t.cuda(device=device, non_blocking=True) for t in batch)
-    #     #
-    #     #     input_ids, input_mask, segment_ids, lm_label_ids, is_next, image_feat, image_loc, image_target, image_label, image_mask, image_ids = (
-    #     #         batch
-    #     #     )
-    #     #
-    #     #     masked_loss_t, masked_loss_v, next_sentence_loss, causal_loss = model(
-    #     #         input_ids,
-    #     #         image_feat,
-    #     #         image_loc,
-    #     #         segment_ids,
-    #     #         input_mask,
-    #     #         image_mask,
-    #     #         lm_label_ids,
-    #     #         image_label,
-    #     #         image_target,
-    #     #         is_next,
-    #     #     )
-    #     #
-    #     #     masked_loss_v = masked_loss_v * args.img_weight
-    #     #     loss = masked_loss_t + masked_loss_v + next_sentence_loss + causal_loss
-    #     #
-    #     #     if n_gpu > 1:
-    #     #         loss = loss.mean()  # mean() to average on multi-gpu.
-    #     #         masked_loss_t = masked_loss_t.mean()
-    #     #         masked_loss_v = masked_loss_v.mean()
-    #     #         next_sentence_loss = next_sentence_loss.mean()
-    #     #         causal_loss = causal_loss.mean()
-    #     #
-    #     #     eval_masked_loss_t += masked_loss_t.item()
-    #     #     eval_masked_loss_v += masked_loss_v.item()
-    #     #     eval_next_sentence_loss += next_sentence_loss.item()
-    #     #     eval_total_loss += loss.item()
-    #     #     eval_causal_loss += causal_loss.item()
-    #     #
-    #     #     end_t = timer()
-    #     #     delta_t = " Time: %5.2fs" % (end_t - start_t)
-    #     #     start_t = end_t
-    #     #     progressString = "\r Evaluating split '%s' [%d/%d]\t" + delta_t
-    #     #     sys.stdout.write(progressString % ('val', step, numBatches))
-    #     #     sys.stdout.flush()
-    #     #
-    #     # eval_masked_loss_t = eval_masked_loss_t / float(numBatches)
-    #     # eval_masked_loss_v = eval_masked_loss_v / float(numBatches)
-    #     # eval_next_sentence_loss = eval_next_sentence_loss / float(numBatches)
-    #     # eval_total_loss = eval_total_loss / float(numBatches)
-    #     # eval_causal_loss = eval_causal_loss / float(numBatches)
-    #     #
-    #     # printFormat = "Evaluation: [Loss: %.5g][Loss_v: %.5g][Loss_t: %.5g][Loss_n: %.5g][Loss_c: %.5g]"
-    #     # printInfo = [
-    #     #     eval_total_loss,
-    #     #     eval_masked_loss_v,
-    #     #     eval_masked_loss_t,
-    #     #     eval_next_sentence_loss,
-    #     #     eval_causal_loss,
-    #     # ]
-    #     #
-    #     # print(printFormat % tuple(printInfo))
-    #     # torch.set_grad_enabled(True)
-    #
-    #     # if default_gpu:
-    #     #     viz.linePlot(epochId, eval_total_loss, "loss", "val")
-    #     #     viz.linePlot(epochId, eval_masked_loss_t, "masked_loss_t", "val")
-    #     #     viz.linePlot(epochId, eval_masked_loss_v, "masked_loss_v", "val")
-    #     #     viz.linePlot(epochId, eval_next_sentence_loss, "next_sentence_loss", "val")
-    #     #     viz.linePlot(epochId, eval_causal_loss, "causal_loss", "val")
-    #
-    #     # Reset dataflow (esp. the pickled key index) after going through dataset
-    #     # train_dataset.reset_index() Not doing this:
-    #
-    #     if default_gpu:
-    #         # Save a trained model
-    #         logger.info("** ** * Saving fine - tuned model ** ** * ")
-    #         model_to_save = (
-    #             model.module if hasattr(model, "module") else model
-    #         )  # Only save the model it-self
-    #         output_model_file = os.path.join(
-    #             savePath, f"pytorch_model_{str(epochId)}.bin"
-    #         )
-    #         torch.save(model_to_save.state_dict(), output_model_file)
-    #         # output_opt_state_dict_file = os.path.join(
-    #         #     savePath, "optimizer_state_" + str(epochId) + ".bin"
-    #         # torch.save(optimizer.state_dict(), output_opt_state_dict_file)
-    #         # )
-    # cleanup()
+        s = t()
+        first = True
+        myprint(f"Loading first batch ...")
+        for step, batch in iterator:
+            if first:
+                myprint(f"Loading first batch took {t() - s} seconds")
+            else:
+                myprint(f"Loading non-first batch took {t() - s} seconds")
+            first = False
+            s = t()
+            training_step(args, batch, default_gpu, device,
+                          epochId, model, optimizer, rank, savePath,
+                          step, train_dataset, viz)
+            myprint(f"ENTIRE TRAIN STEP TOOK {t() - s} SECONDS")
+            s = t()
+        # Do the evaluation
+        # torch.set_grad_enabled(False)
+        # start_t = timer()
+        # numBatches = len(validation_dataset)
+        # eval_masked_loss_t = 0
+        # eval_masked_loss_v = 0
+        # eval_next_sentence_loss = 0
+        # eval_total_loss = 0
+        # eval_causal_loss = 0
+        #
+        # model.eval()
+        # for step, batch in enumerate(validation_dataset, 1):
+        #     batch = tuple(t.cuda(device=device, non_blocking=True) for t in batch)
+        #
+        #     input_ids, input_mask, segment_ids, lm_label_ids, is_next, image_feat, image_loc, image_target, image_label, image_mask, image_ids = (
+        #         batch
+        #     )
+        #
+        #     masked_loss_t, masked_loss_v, next_sentence_loss, causal_loss = model(
+        #         input_ids,
+        #         image_feat,
+        #         image_loc,
+        #         segment_ids,
+        #         input_mask,
+        #         image_mask,
+        #         lm_label_ids,
+        #         image_label,
+        #         image_target,
+        #         is_next,
+        #     )
+        #
+        #     masked_loss_v = masked_loss_v * args.img_weight
+        #     loss = masked_loss_t + masked_loss_v + next_sentence_loss + causal_loss
+        #
+        #     if n_gpu > 1:
+        #         loss = loss.mean()  # mean() to average on multi-gpu.
+        #         masked_loss_t = masked_loss_t.mean()
+        #         masked_loss_v = masked_loss_v.mean()
+        #         next_sentence_loss = next_sentence_loss.mean()
+        #         causal_loss = causal_loss.mean()
+        #
+        #     eval_masked_loss_t += masked_loss_t.item()
+        #     eval_masked_loss_v += masked_loss_v.item()
+        #     eval_next_sentence_loss += next_sentence_loss.item()
+        #     eval_total_loss += loss.item()
+        #     eval_causal_loss += causal_loss.item()
+        #
+        #     end_t = timer()
+        #     delta_t = " Time: %5.2fs" % (end_t - start_t)
+        #     start_t = end_t
+        #     progressString = "\r Evaluating split '%s' [%d/%d]\t" + delta_t
+        #     sys.stdout.write(progressString % ('val', step, numBatches))
+        #     sys.stdout.flush()
+        #
+        # eval_masked_loss_t = eval_masked_loss_t / float(numBatches)
+        # eval_masked_loss_v = eval_masked_loss_v / float(numBatches)
+        # eval_next_sentence_loss = eval_next_sentence_loss / float(numBatches)
+        # eval_total_loss = eval_total_loss / float(numBatches)
+        # eval_causal_loss = eval_causal_loss / float(numBatches)
+        #
+        # printFormat = "Evaluation: [Loss: %.5g][Loss_v: %.5g][Loss_t: %.5g][Loss_n: %.5g][Loss_c: %.5g]"
+        # printInfo = [
+        #     eval_total_loss,
+        #     eval_masked_loss_v,
+        #     eval_masked_loss_t,
+        #     eval_next_sentence_loss,
+        #     eval_causal_loss,
+        # ]
+        #
+        # print(printFormat % tuple(printInfo))
+        # torch.set_grad_enabled(True)
+
+        # if default_gpu:
+        #     viz.linePlot(epochId, eval_total_loss, "loss", "val")
+        #     viz.linePlot(epochId, eval_masked_loss_t, "masked_loss_t", "val")
+        #     viz.linePlot(epochId, eval_masked_loss_v, "masked_loss_v", "val")
+        #     viz.linePlot(epochId, eval_next_sentence_loss, "next_sentence_loss", "val")
+        #     viz.linePlot(epochId, eval_causal_loss, "causal_loss", "val")
+
+        # Reset dataflow (esp. the pickled key index) after going through dataset
+        # train_dataset.reset_index() Not doing this:
+
+        if default_gpu:
+            # Save a trained model
+            logger.info("** ** * Saving fine - tuned model ** ** * ")
+            model_to_save = (
+                model.module if hasattr(model, "module") else model
+            )  # Only save the model it-self
+            output_model_file = os.path.join(
+                savePath, f"pytorch_model_{str(epochId)}.bin"
+            )
+            torch.save(model_to_save.state_dict(), output_model_file)
+            # output_opt_state_dict_file = os.path.join(
+            #     savePath, "optimizer_state_" + str(epochId) + ".bin"
+            # torch.save(optimizer.state_dict(), output_opt_state_dict_file)
+            # )
+    cleanup()
+
 
 
 
 def main_pl():
 
-    myprint("Entered main_single_process")
-    # setup(rank=rank, world_size=args.world_size)
+    from devlbert.devlbert import BertForMultiModalPreTraining, BertConfig
+    parser = argparse.ArgumentParser()
+    parser = add_program_argparse_args(parser)
+
+    # add all the available trainer options to argparse
+    # ie: now --gpus --num_nodes ... --fast_dev_run all work in the cli
+    parser = Trainer.add_argparse_args(parser)
+
+    args = parser.parse_args()
+    opt = vars(args) # From https://sungwookyoo.github.io/tips/ArgParser/
+    args = yaml.load(open(args.config), Loader=yaml.FullLoader)
+    opt.update(args)
+    args = argparse.Namespace(**opt)
     s = t()
     if args.debug:
         logger.setLevel(logging.DEBUG)
     if args.baseline:
-        from pytorch_pretrained_bert.modeling import BertConfig
-        from devlbert.basebert import BertForMultiModalPreTraining
-    else:
-        from devlbert.devlbert import BertForMultiModalPreTraining, BertConfig
+        raise NotImplementedError
 
     logger.info('\r\n'.join(f'{k}: {v}' for k, v in args.__dict__.items()))
+
+    #region Getting BertConfig and tweaking it based on args
     config = BertConfig.from_json_file(args.config_file)
     if args.freeze > config.t_biattention_id[0]:
         config.fixed_t_layer = config.t_biattention_id[0]
     if args.without_coattention:
         config.with_coattention = False
-    # save all the hidden parameters.
-    with open(os.path.join(savePath, 'command.txt'), 'w') as f:
-        print(args, file=f)  # Python 3.x
-        print('\n', file=f)
-        print(config, file=f)
-    bert_weight_name = json.load(open("config/" + "bert-base-uncased_weight_name.json", "r"))
+    if args.predict_feature:
+        config.v_target_size = 2048
+        config.predict_feature = True
+    else:
+        config.v_target_size = 1601
+        config.predict_feature = False
+    #endregion
 
-    torch.cuda.set_device(device)
-    n_gpu = 1
-    default_gpu = rank == 0
 
     if args.gradient_accumulation_steps < 1:
         raise ValueError(
@@ -686,11 +699,12 @@ def main_pl():
             )
         )
     args.train_batch_size = args.train_batch_size // args.gradient_accumulation_steps
-    random.seed(args.seed)
-    np.random.seed(args.seed)
-    torch.manual_seed(args.seed)
-    if n_gpu > 0:
-        torch.cuda.manual_seed_all(args.seed)
+
+    # random.seed(args.seed)
+    # np.random.seed(args.seed)
+    # torch.manual_seed(args.seed)
+    # seed_everything(args.seed DONE IN PL ALREADY
+
     if not os.path.exists(args.output_dir):
         os.makedirs(args.output_dir)
     tokenizer = BertTokenizer.from_pretrained(
@@ -703,146 +717,27 @@ def main_pl():
         batch_size=args.train_batch_size,
         predict_feature=args.predict_feature,
         num_workers=args.num_workers,
-        savePath=savePath,
         mini=args.mini,
         shuffle=args.shuffle
     )
-    # validation_dataset = ConceptCapLoaderVal(
-    #     args.validation_file,
-    #     tokenizer,
-    #     seq_len=args.max_seq_length,
-    #     batch_size=args.train_batch_size,
-    #     predict_feature=args.predict_feature,
-    #     num_workers=2,
-    #     distributed=args.distributed,
-    # )
-    num_train_optimization_steps = (
-            int(
-                train_dataset.num_dataset
-                / args.train_batch_size
-                / args.gradient_accumulation_steps
-            )
-            * args.num_train_epochs
-    )
 
-    viz = TBlogger(Path(args.output_dir, "logs"), Path(savePath).name)
 
-    # pdb.set_trace()
-    if args.predict_feature:
-        config.v_target_size = 2048
-        config.predict_feature = True
-    else:
-        config.v_target_size = 1601
-        config.predict_feature = False
     if args.from_pretrained:
-        model = DDP(BertForMultiModalPreTraining.from_pretrained(args.from_pretrained, config, args=args).to(device),
-                    device_ids=[device])
-
-        # Load correct epoch
-        epoch_file = get_epoch_file_path(savePath)
-        if epoch_file is not None:
-            with open(epoch_file, 'r') as f:
-                args.start_epoch = json.load(f)
-            print(f"Loading start epoch from {epoch_file}")
-
-        ckpt_load_path = Path(savePath, f"pytorch_model_{int(args.start_epoch) - 1}.bin")
-        if args.continue_training and Path(ckpt_load_path).exists():
-            # ckpt_load_path = os.path.join(args.from_pretrained,
-            #                               "pytorch_model_{}.bin".format(int(args.start_epoch) - 1))
-            # model = BertForMultiModalPreTraining.from_pretrained(ckpt_load_path, config)
-            print(f"Loading model from checkpoint {ckpt_load_path}")
-            # map_location = {f'cuda:{rank_to_device(MASTER_RANK)}': str(device)}
-
-            model.module.load_state_dict(
-                torch.load(ckpt_load_path, map_location=device))
-            torch.cuda.empty_cache()
-            # model = torch.load(ckpt_load_path, map_location=map_location)
-
-            # if not default_gpu:
-            #     print(5)
-            # print("SLEEPING FOR DEBUGGING")
-            # sleep(10000000)
-
-            # # Load correct within-epoch step
-            # step_file = get_step_file_path(savePath)
-            # if step_file is not None:
-            #     with open(step_file, 'r') as f:
-            #         start_step = json.load(f)
-            #     print(f"Loading start step from {step_file}")
+        model = BertForMultiModalPreTraining.from_pretrained(args.from_pretrained, config, args=args)
     else:
-        model = DDP(BertForMultiModalPreTraining(config).to(device), device_ids=[device])
+        model = BertForMultiModalPreTraining(config)
 
-    # Nathan: updating according to https://nvidia.github.io/apex/amp.html#transition-guide-for-old-api-users
-    # if args.fp16:
-    # model.half() # replacing with "model, optimizer = amp.initialize(mode, optimizer,opt_level='O2')" later on
-
-    # elif n_gpu > 1:
-    no_decay = ["bias", "LayerNorm.bias", "LayerNorm.weight"]
-    if args.freeze != -1:
-        bert_weight_name_filtered = []
-        for name in bert_weight_name:
-            if 'embeddings' in name:
-                bert_weight_name_filtered.append(name)
-            elif 'encoder' in name:
-                layer_num = name.split('.')[2]
-                if int(layer_num) <= args.freeze:
-                    bert_weight_name_filtered.append(name)
-
-        optimizer_grouped_parameters = []
-        for key, value in dict(model.named_parameters()).items():
-            if key[12:] in bert_weight_name_filtered:
-                value.requires_grad = False
-
-    if not args.from_pretrained:
-        param_optimizer = list(model.named_parameters())
-        optimizer_grouped_parameters = [
-            {
-                "params": [
-                    p for n, p in param_optimizer if not any(nd in n for nd in no_decay)
-                ],
-                "weight_decay": 0.01,
-            },
-            {
-                "params": [
-                    p for n, p in param_optimizer if any(nd in n for nd in no_decay)
-                ],
-                "weight_decay": 0.0,
-            },
-        ]
-    else:
-        optimizer_grouped_parameters = []
-        for key, value in dict(model.named_parameters()).items():
-            if value.requires_grad:
-                # if key[12:] in bert_weight_name:
-                if key[5:] in bert_weight_name:  # Nathan: starts with "bert.", guess the 12: was for an old version
-                    lr = args.learning_rate * 0.1
-                else:
-                    lr = args.learning_rate
-
-                if any(nd in key for nd in no_decay):
-                    optimizer_grouped_parameters += [
-                        {"params": [value], "lr": lr, "weight_decay": 0.01}
-                    ]
-
-                if not any(nd in key for nd in no_decay):
-                    optimizer_grouped_parameters += [
-                        {"params": [value], "lr": lr, "weight_decay": 0.0}
-                    ]
-        if default_gpu:
-            print(len(list(model.named_parameters())), len(optimizer_grouped_parameters))
-
-
-
+    lr_monitor = LearningRateMonitor(logging_interval='step')
+    checkpoint_callback = ModelCheckpoint(dirpath=args.output_dir,save_top_k=-1)
+    trainer = pl.Trainer.from_argparse_args(args,
+                                            plugins=DDPPlugin(find_unused_parameters=False), #from https://pytorch-lightning.readthedocs.io/en/latest/benchmarking/performance.html#when-using-ddp-set-find-unused-parameters-false
+                                            callbacks=[lr_monitor, checkpoint_callback])
     myprint("***** Running training *****")
-    myprint("  Num examples = %d", train_dataset.num_dataset,
-            "  Batch size = %d", args.train_batch_size,
-            "  Num steps = %d", num_train_optimization_steps)
-    myprint(f'Getting to epoch loop took {t() - s} seconds')
-    # random.seed(torch.distributed.get_rank() * 2000)
-    for epochId in range(int(args.start_epoch), int(args.num_train_epochs)):
-        lr_monitor = LearningRateMonitor(logging_interval='step')
-        trainer = pl.Trainer(callbacks=[lr_monitor], fast_dev_run=True, gpus=[0], default_root_dir=args.output_dir)
-        trainer.fit(model, train_dataloader=train_dataset)
+    myprint("  Num examples =", train_dataset.num_dataset,
+            "  Batch size =", args.train_batch_size,
+            "  Num steps =", len(train_dataset))
+    myprint(f'Getting to trainer.fit took {t() - s} seconds')
+    trainer.fit(model, train_dataloader=train_dataset)
 
 
 
