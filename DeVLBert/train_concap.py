@@ -1,16 +1,18 @@
 # region pre-stuff
 from time import time as t, sleep
+first_start = t()
 import glob
 
 import warnings
 from time import sleep
 import os
+# from memory_profiler import profile
 
 import yaml
 from pretorch_util import get_free_gpus
 from pytorch_lightning.plugins import DDPPlugin
-
-os.environ['CUDA_VISIBLE_DEVICES'] = ",".join([str(i) for i in get_free_gpus()])
+import jsonargparse
+# os.environ['CUDA_VISIBLE_DEVICES'] = ",".join([str(i) for i in get_free_gpus()])
 warnings.simplefilter(action='ignore', category=FutureWarning)
 warnings.simplefilter(action='ignore', category=UserWarning)
 # from devlbert.datasets.concept_cap_dataset import get_core_ds
@@ -46,8 +48,8 @@ from devlbert.devlbert import BertForMultiModalPreTraining, BertConfig
 import torch.distributed as dist
 import pdb
 from time import gmtime
-from constants import MODEL_CKPT_DIR
-from util import rank_to_device, MyLogger, myprint, get_rank, setup, cleanup
+from constants import MODEL_CKPT_DIR, HOST, PROFILING_LOG_FILE_HANDLE
+from util import rank_to_device, MyLogger, myprint, get_rank, setup, cleanup, is_on_tpus, print_gpu_mem
 from torch.nn.parallel import DistributedDataParallel as DDP
 
 logging.setLoggerClass(MyLogger)
@@ -89,7 +91,11 @@ def main():
 def add_program_argparse_args(parser):
     # Required parameters
     parser.add_argument('--config', help="configuration file *.yml. Can be overriden with direct args",
-                        type=str, required=False, default='config/pretrain_concap_devlbert.yml')
+                        action=jsonargparse.ActionConfigFile)
+
+    parser.add_argument(
+        "--empty_data", action="store_true", help="Whether to use fake empty data (to quickly check between-epoch functionality)."
+    )
     parser.add_argument(
         "--train_file",
         default="data/training",
@@ -97,6 +103,12 @@ def add_program_argparse_args(parser):
         type=str,
         # required=True,
         help="The input train corpus.",
+    )
+    parser.add_argument(
+        "--region_mask_prob",
+        default=0.15,
+        type=float,
+        help="Probability of masking a token during pretraining.",
     )
     parser.add_argument(
         "--validation_file",
@@ -157,12 +169,6 @@ def add_program_argparse_args(parser):
         help="The initial learning rate for Adam.",
     )
     parser.add_argument(
-        "--num_train_epochs",
-        default=12.0,
-        type=float,
-        help="Total number of training epochs to perform.",
-    )
-    parser.add_argument(
         "--start_epoch",
         default=0,
         type=float,
@@ -191,6 +197,11 @@ def add_program_argparse_args(parser):
         type=bool,
         default=True,
         help="Whether to lower case the input text. True for uncased models, False for cased models.",
+    )
+    parser.add_argument(
+        "--myresume",
+        action="store_true",
+        help="For the specific case of continuing pretraining with different mask rate to repro devlbert",
     )
     parser.add_argument(
         "--local_rank",
@@ -360,6 +371,7 @@ def main_single_process(rank, args, savePath):
             )
             * args.num_train_epochs
     )
+
 
     viz = TBlogger(Path(args.output_dir, "logs"), Path(savePath).name)
 
@@ -652,30 +664,117 @@ def main_single_process(rank, args, savePath):
     cleanup()
 
 
+def add_jsonargparse_args(cls, parent_parser: jsonargparse.ArgumentParser) -> jsonargparse.ArgumentParser:
+    r"""Extends existing argparse by default `Trainer` attributes.
+
+    Args:
+        cls: Lightning class
+        parent_parser:
+            The custom cli arguments parser, which will be extended by
+            the Trainer default arguments.
+
+    Only arguments of the allowed types (str, float, int, bool) will
+    extend the `parent_parser`.
+
+    Examples:
+        >>> import argparse
+        >>> from pytorch_lightning import Trainer
+        >>> parser = argparse.ArgumentParser()
+        >>> parser = Trainer.add_argparse_args(parser)
+        >>> args = parser.parse_args([])
+    """
+    # parser = jsonargparse.ArgumentParser(
+    #     parents=[parent_parser],
+    #     add_help=False
+    # )
+    parser = parent_parser
 
 
+
+    blacklist = ['kwargs']
+    depr_arg_names = cls.get_deprecated_arg_names() + blacklist
+
+    allowed_types = (str, int, float, bool)
+    from pytorch_lightning.utilities.argparse import parse_args_from_docstring, get_init_arguments_and_types, \
+        _gpus_allowed_type, _int_or_float_type
+    from pytorch_lightning.utilities import parsing
+    args_help = parse_args_from_docstring(cls.__init__.__doc__ or cls.__doc__)
+    for arg, arg_types, arg_default in (at for at in get_init_arguments_and_types(cls) if at[0] not in depr_arg_names):
+        arg_types = [at for at in allowed_types if at in arg_types]
+        if not arg_types:
+            # skip argument with not supported type
+            continue
+        arg_kwargs = {}
+        if bool in arg_types:
+            arg_kwargs.update(nargs="?", const=True)
+            # if the only arg type is bool
+            if len(arg_types) == 1:
+                use_type = parsing.str_to_bool
+            elif str in arg_types:
+                use_type = parsing.str_to_bool_or_str
+            else:
+                # filter out the bool as we need to use more general
+                use_type = [at for at in arg_types if at is not bool][0]
+        else:
+            use_type = arg_types[0]
+
+        if arg == 'gpus' or arg == 'tpu_cores':
+            use_type = _gpus_allowed_type
+
+        # hack for types in (int, float)
+        if len(arg_types) == 2 and int in set(arg_types) and float in set(arg_types):
+            use_type = _int_or_float_type
+
+        # hack for track_grad_norm
+        if arg == 'track_grad_norm':
+            use_type = float
+
+        parser.add_argument(
+            f'--{arg}',
+            dest=arg,
+            default=arg_default,
+            type=use_type,
+            help=args_help.get(arg),
+            **arg_kwargs,
+        )
+
+    return parser
+
+# @profile(stream=PROFILING_LOG_FILE_HANDLE)
+# @profile
 def main_pl():
 
+    s = t()
     from devlbert.devlbert import BertForMultiModalPreTraining, BertConfig
-    parser = argparse.ArgumentParser()
+    parser = jsonargparse.ArgumentParser()
     parser = add_program_argparse_args(parser)
 
     # add all the available trainer options to argparse
     # ie: now --gpus --num_nodes ... --fast_dev_run all work in the cli
-    parser = Trainer.add_argparse_args(parser)
+    # parser = Trainer.add_argparse_args(parser)
+    # parser = add_jsonargparse_args(Trainer, parser)
 
+    parser.add_class_arguments(Trainer, 'trainer', as_group=True)
     args = parser.parse_args()
-    opt = vars(args) # From https://sungwookyoo.github.io/tips/ArgParser/
-    args = yaml.load(open(args.config), Loader=yaml.FullLoader)
-    opt.update(args)
-    args = argparse.Namespace(**opt)
-    s = t()
+    if args.trainer.min_epochs != args.trainer.max_epochs:
+        raise NotImplementedError
+    else:
+        args.num_train_epochs = args.trainer.min_epochs
+    if not is_on_tpus():
+        args.trainer.tpu_cores = None
+    else:
+        if HOST == 'LIIR':
+            if args.trainer.gpus == None:
+                args.trainer.gpus = 4
+        elif HOST == 'VSC':
+            if args.trainer.gpus == None:
+                args.trainer.gpus = 8
     if args.debug:
         logger.setLevel(logging.DEBUG)
     if args.baseline:
         raise NotImplementedError
 
-    logger.info('\r\n'.join(f'{k}: {v}' for k, v in args.__dict__.items()))
+    logger.info(yaml.dump(args))
 
     #region Getting BertConfig and tweaking it based on args
     config = BertConfig.from_json_file(args.config_file)
@@ -711,6 +810,23 @@ def main_pl():
         args.bert_model, do_lower_case=args.do_lower_case
     )
 
+    class EmptyData(object):
+
+
+        def __init__(
+                self
+        ):
+            self.data = []
+            self.num_dataset = 0
+
+        def __iter__(self):
+
+            for batch in self.data:
+                yield batch
+
+        def __len__(self):
+            return len(self.data)
+
     train_dataset = ConceptCapLoaderTrain(
         tokenizer,
         seq_len=args.max_seq_length,
@@ -718,25 +834,35 @@ def main_pl():
         predict_feature=args.predict_feature,
         num_workers=args.num_workers,
         mini=args.mini,
-        shuffle=args.shuffle
-    )
+        shuffle=args.shuffle,
+        args=args
+    ) #if not args.empty_data else EmptyData()
 
 
-    if args.from_pretrained:
+
+    if args.from_pretrained != 'false':
         model = BertForMultiModalPreTraining.from_pretrained(args.from_pretrained, config, args=args)
     else:
         model = BertForMultiModalPreTraining(config)
 
+    if args.myresume:
+        list_of_files = glob.glob(f'{args.output_dir}/epoch=*.ckpt')  # * means all if need specific format then *.csv
+        latest_ckpt = max(list_of_files, key=os.path.getctime)
+        model = BertForMultiModalPreTraining.load_from_checkpoint(latest_ckpt, config=config, args=args)
+
     lr_monitor = LearningRateMonitor(logging_interval='step')
     checkpoint_callback = ModelCheckpoint(dirpath=args.output_dir,save_top_k=-1)
-    trainer = pl.Trainer.from_argparse_args(args,
-                                            plugins=DDPPlugin(find_unused_parameters=False), #from https://pytorch-lightning.readthedocs.io/en/latest/benchmarking/performance.html#when-using-ddp-set-find-unused-parameters-false
-                                            callbacks=[lr_monitor, checkpoint_callback])
+    trainer = pl.Trainer.from_argparse_args(args.trainer, # auto_scale_batch_size='binsearch',
+                                            plugins=[DDPPlugin(find_unused_parameters=False)] if args.trainer.tpu_cores is None else [],  #from https://pytorch-lightning.readthedocs.io/en/latest/benchmarking/performance.html#when-using-ddp-set-find-unused-parameters-false
+                                            callbacks=[lr_monitor, checkpoint_callback],
+                                            profiler='simple')
+    print_gpu_mem()
     myprint("***** Running training *****")
     myprint("  Num examples =", train_dataset.num_dataset,
             "  Batch size =", args.train_batch_size,
             "  Num steps =", len(train_dataset))
-    myprint(f'Getting to trainer.fit took {t() - s} seconds')
+    myprint(f'Getting to trainer.fit took {t() - first_start} seconds')
+    # trainer.tune(model,train_dataloader=train_dataset)
     trainer.fit(model, train_dataloader=train_dataset)
 
 
@@ -750,6 +876,7 @@ def training_step(args, batch, default_gpu, device, epochId, model, optimizer, r
     )
     s = t()
     myprint(f'Doing Model input --> model output losses')
+    # test comment VSC
     # myprint(str(list(model.module.parameters())[0].device))
     # myprint(str(input_ids.device))
     # skip_sleep = False
@@ -789,9 +916,9 @@ def training_step(args, batch, default_gpu, device, epochId, model, optimizer, r
     else:
         loss.backward()
     myprint(f'Calculating gradients took {t() - s}')
-    if math.isnan(loss.item()):
-        myprint("math.isnan(loss.item())")
-        pdb.set_trace()
+    # if math.isnan(loss.detach().item()):
+    #     myprint("math.isnan(loss.item())")
+    #     pdb.set_trace()
     if default_gpu:
         s = t()
         myprint(f"tboard logging ...")

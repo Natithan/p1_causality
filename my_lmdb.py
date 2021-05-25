@@ -72,11 +72,12 @@ from tensorpack.dataflow.base import DataFlow, DataFlowReentrantGuard
 from tensorpack.dataflow import BatchData, MultiProcessRunnerZMQ
 from tensorpack.dataflow.common import MapData
 from tensorpack.dataflow.format import LMDBData
-from util import get_rank, get_world_size, MyLogger, my_maybe_print
+from util import get_rank, get_world_size, MyLogger, my_maybe_print, myprint, is_on_tpus
 import glob
 import logging
 
 import multiprocessing as mp
+import pickle5
 
 logging.setLoggerClass(MyLogger)
 logging.basicConfig(
@@ -251,7 +252,7 @@ class MyLMDBSerializer:
         db.close()
 
     @staticmethod
-    def load(paths: List[str], shuffle=True, savePath=None):
+    def load(paths: List[str], shuffle=True, savePath=None,args=None):
         """
         Note:
             If you found deserialization being the bottleneck, you can use :class:`LMDBData` as the reader
@@ -262,46 +263,66 @@ class MyLMDBSerializer:
         if savePath is not None:
             df = MyNonResamplingLMDBData(paths, shuffle=shuffle, savePath=savePath)
         else:
-            df = MyLMDBData(paths, shuffle=shuffle)
+            df = MyLMDBData(paths, shuffle=shuffle,args=args)
         return MapData(df, MyLMDBSerializer._deserialize_lmdb)
 
     @staticmethod
     def _deserialize_lmdb(dp):
-        return loads(dp[1])
+        # return loads(dp[1])
+        return pickle5.loads(dp[1]) # tmp fix
+
+
+def gpu_count_from_gpu_arg(gpus): # See https://pytorch-lightning.readthedocs.io/en/stable/advanced/multi_gpu.html#select-gpu-devices
+    if gpus == None or gpus == 0:
+        return 1
+    elif type(gpus) == int:
+        return gpus
+    elif type(gpus) == list:
+        return len(gpus)
+    else:
+        raise NotImplementedError
 
 
 class MyLMDBData(LMDBData):
-    def __init__(self, lmdb_paths: List[str], shuffle=True, keys=None):
-        self.rank = get_rank()
-        self.nb_processes = get_world_size()
+    def __init__(self, lmdb_paths: List[str], shuffle=True, keys=None,args=None):
 
         self._lmdb_paths = lmdb_paths
         self._shuffle = shuffle
-
+        self.args = args
+        self.nb_processes = args.trainer.tpu_cores if is_on_tpus() else gpu_count_from_gpu_arg(args.trainer.gpus)
         self._open_lmdbs()
         self._sizes = [txn.stat()['entries'] for txn in self._txns]
         self.rng = get_rng(self)
         logger.info("Found {} entries in {}".format([s for s in self._sizes], [p for p in self._lmdb_paths]))
 
-        self._set_keys()
+        # self._set_keys()
         # Clean them up after finding the list of keys, since we don't want to fork them
         self._close_lmdbs()
 
-    def _set_keys(self, keys=None):
-
-        all_keys_list = [loads(txn.get(b'__keys__')) for txn in self._txns]
-        self.keys_list = [akeys[self.rank::self.nb_processes] for akeys in all_keys_list]
-        if self._shuffle:
-            self.shuffle_keys()
+    # def _set_keys(self, keys=None):
+    #
+    #     # all_keys_list = [loads(txn.get(b'__keys__')) for txn in self._txns]
+    #     all_keys_list = [pickle5.loads(txn.get(b'__keys__')) for txn in self._txns] #tmp fix
+    #
+    #
+    #     self.keys_list = [akeys[self.rank::self.nb_processes] for akeys in all_keys_list]
+    #     if self._shuffle:
+    #         self.shuffle_keys()
 
     def shuffle_keys(self):
+        raise NotImplementedError
         [self.rng.shuffle(ks) for ks in self.keys_list]  # Modifies in-place
 
     def _open_lmdbs(self):
+        # self._lmdbs = [lmdb.open(p,
+        #                          subdir=os.path.isdir(p),
+        #                          readonly=True, lock=False, readahead=True,
+        #                          map_size=1099511627776 * 2, max_readers=100)
+        #                for p in self._lmdb_paths
+        #                ] # Adjusting for VSC
         self._lmdbs = [lmdb.open(p,
                                  subdir=os.path.isdir(p),
-                                 readonly=True, lock=False, readahead=True,
-                                 map_size=1099511627776 * 2, max_readers=100)
+                                 readonly=True, lock=False, readahead=True)
                        for p in self._lmdb_paths
                        ]
         self._txns = [env.begin() for env in self._lmdbs]
@@ -315,14 +336,15 @@ class MyLMDBData(LMDBData):
     def reset_state(self):
         self._guard = DataFlowReentrantGuard()
         self.rng = get_rng(self)
-        self.shuffle_keys()
+        # self.shuffle_keys()
         self._open_lmdbs()  # open the LMDB in the worker process
 
     def __iter__(self):
         ys = t()
 
+        self.rank = get_rank()
+        self.nb_processes = get_world_size()
         y_times = []
-        BATCH_SIZE = 96
         with self._guard:
             if not self._shuffle:
                 for j, txn in enumerate(self._txns):
@@ -336,7 +358,7 @@ class MyLMDBData(LMDBData):
                     for i, k in enumerate(keys):
                         v = txn.get(k)
                         y_times.append(t() - ys)
-                        if i % BATCH_SIZE == 0:
+                        if i % self.args.train_batch_size == 0:
                             my_maybe_print(f"MyLMDBData between-yield time for {len(y_times)} elements was {sum(y_times)}")
                             y_times = []
                         yield [k, v]
@@ -347,6 +369,7 @@ class MyLMDBData(LMDBData):
             return sum(len(ks) for ks in self.keys_list)
         else:
             return sum([int(s // self.nb_processes) for s in self._sizes])
+            # return sum(self._sizes) # Adjusting because now only splitting into multiple processes after init
 
 
 

@@ -14,7 +14,7 @@ import numpy as np
 from tensorpack import LMDBSerializer
 from tqdm import tqdm
 
-from constants import OLD_10_100_LMDB_PATH, ROOT_DIR, MTURK_DIR
+from constants import OLD_10_100_LMDB_PATH, PROJECT_ROOT_DIR, MTURK_DIR
 from preprocess import CoCaDataFlow, setup
 IMG_ONLY = True
 COUNT_FILE = 'cooc_counts_img'

@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <project version="4">
-  <component name="PublishConfigData" autoUpload="Always" serverName="shared" exclude=".svn;.cvs;.idea;.DS_Store;.git;.hg;*.hprof;*.pyc;cooc_counts_*;Train_GCC-training.tsv;z_archive;caption_train.json" remoteFilesAllowedToDisappearOnAutoupload="false">
+  <component name="PublishConfigData" autoUpload="Always" serverName="frodo" exclude=".svn;.cvs;.idea;.DS_Store;.git;.hg;*.hprof;*.pyc;cooc_counts_*;Train_GCC-training.tsv;z_archive;caption_train.json" remoteFilesAllowedToDisappearOnAutoupload="false">
     <serverData>
       <paths name="Copy of project-level server 'arwen'">
         <serverdata>
@@ -125,12 +125,24 @@
           </excludedPaths>
         </serverdata>
       </paths>
+      <paths name="gcp">
+        <serverdata>
+          <mappings>
+            <mapping deploy="p1_causality/buatest" local="$PROJECT_DIR$/buatest" web="/" />
+            <mapping deploy="p1_causality" local="$PROJECT_DIR$" web="/" />
+            <mapping deploy="p1_causality/DeVLBert" local="$PROJECT_DIR$/DeVLBert" web="/" />
+          </mappings>
+        </serverdata>
+      </paths>
       <paths name="genius">
         <serverdata>
           <mappings>
             <mapping deploy="/p1_causality" local="$PROJECT_DIR$" web="/" />
             <mapping local="" web="/" />
           </mappings>
+          <excludedPaths>
+            <excludedPath path="p1_causality/DeVLBert/tools/DownloadConcptualCaption/Train_GCC-training.tsv" />
+          </excludedPaths>
         </serverdata>
       </paths>
       <paths name="nathan@gimli.cs.kuleuven.be:22">

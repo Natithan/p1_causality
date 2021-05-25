@@ -5,7 +5,7 @@ import pandas as pd
 import sys
 import datetime
 from absl import flags
-from constants import ROOT_DIR, MTURK_DIR
+from constants import PROJECT_ROOT_DIR, MTURK_DIR
 
 import interface
 from easyturk import EasyTurk

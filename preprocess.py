@@ -11,7 +11,7 @@ import json
 import csv
 from pathlib import Path
 from tensorpack.dataflow import DataFlow, RNGDataFlow, BatchData
-from constants import CHECKPOINT_FREQUENCY, ROOT_DIR, STORAGE_DIR, BUA_ROOT_DIR
+from constants import CHECKPOINT_FREQUENCY, PROJECT_ROOT_DIR, STORAGE_DIR, BUA_ROOT_DIR
 from my_lmdb import MyLMDBSerializer
 import sys
 
@@ -216,7 +216,7 @@ class CoCaInputDataflow(DataFlow):
             self.captions = json.load(open(caption_path, 'r'))
             print(f"Loaded captions in {time() - s}.")
         else:
-            df = open_tsv(Path(ROOT_DIR, 'DeVLBert/tools/DownloadConcptualCaption/Train_GCC-training.tsv'), 'training')
+            df = open_tsv(Path(PROJECT_ROOT_DIR, 'DeVLBert/tools/DownloadConcptualCaption/Train_GCC-training.tsv'), 'training')
             print("Indexing captions ...")
             ray.init()
             futures = [index_df_column.remote(df[i::FGS.num_cpus], 'caption') for i in range(FGS.num_cpus)]

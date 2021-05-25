@@ -4,7 +4,7 @@ from tqdm import tqdm
 
 warnings.simplefilter(action='ignore', category=FutureWarning)
 import os, glob
-from constants import DEVLBERT_ROOT_DIR, LMDB_PATHS, MTURK_DIR, ARWEN_LMDB_PATHS, ROOT_DIR
+from constants import DEVLBERT_ROOT_DIR, LMDB_PATHS, MTURK_DIR, ARWEN_LMDB_PATHS, PROJECT_ROOT_DIR
 # export PYTHONPATH=/cw/liir/NoCsBack/testliir/nathan/p1_causality/DeVLBert:$PYTHONPATH
 # os.environ['PYTHONPATH'] = f"{DEVLBERT_ROOT_DIR}:{os.environ['PYTHONPATH']}"
 from devlbert.datasets.retreival_dataset import MyRetreivalDataset
@@ -49,7 +49,7 @@ PRETRAINED_PATH = MY_DEVLBERT_PATH
 DATASET = 'coca'
 # DATASET = 'flickr30k'
 
-OUT_DIR = Path(ROOT_DIR, f'{STATISTIC}_output')
+OUT_DIR = Path(PROJECT_ROOT_DIR, f'{STATISTIC}_output')
 AA = ('avgAtt' == STATISTIC)
 
 BATCH_SIZE = 32
@@ -86,7 +86,7 @@ def main_single_process(rank, world_size, run_id):
     if DATASET == 'coca':
         train_dataset = ConceptCapLoaderTrain(
             tokenizer,
-            lmdb_paths=ARWEN_LMDB_PATHS,
+            lmdb_paths=LMDB_PATHS,
             seq_len=36,
             batch_size=BATCH_SIZE,
             predict_feature=False,

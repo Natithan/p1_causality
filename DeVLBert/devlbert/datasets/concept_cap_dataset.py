@@ -5,6 +5,7 @@ import itertools
 import zmq
 from pathlib import Path
 
+# from memory_profiler import profile
 import json
 import logging
 import os
@@ -16,7 +17,7 @@ import tensorpack.dataflow as td
 
 import multiprocessing as mp
 import torch
-from constants import CAPTION_PATH, LMDB_PATHS
+from constants import CAPTION_PATH, LMDB_PATHS, MINI_LMDB_PATHS, CENTI_LMDB_PATHS
 from tensorpack.dataflow.base import DataFlowReentrantGuard
 from tensorpack.dataflow.parallel import _repeat_iter, _ExceptionWrapper, _zmq_catch_error, _get_pipe_name, _bind_guard
 from tensorpack.utils.concurrency import enable_death_signal
@@ -25,7 +26,7 @@ from torch.utils.data.sampler import Sampler
 import torch.distributed as dist
 import sys
 import pdb
-from constants import ID2CLASS_PATH
+from constants import ID2CLASS_PATH, PROFILING_LOG_FILE_HANDLE
 from typing import List
 from time import time as t, sleep
 from util import MyLogger, my_maybe_print, get_rank, get_world_size
@@ -110,7 +111,7 @@ class ConceptCapLoaderTrain(object):
     Data loader. Combines a dataset and a sampler, and provides
     single- or multi-process iterators over the dataset.
 
-    Resampling version of data iteration (each datapoint sampled i.i.d., with possible duplicates between workers)
+    Nathan: Resampling version of data iteration (each datapoint sampled i.i.d., with possible duplicates between workers)
     , without corresponding per-worker checkpointing of which part of data they are
      responsible for, and what location in that part they are currently at
     Arguments:
@@ -149,7 +150,8 @@ class ConceptCapLoaderTrain(object):
             distributed=True,
             visualization=False,
             savePath=None,
-            mini=False
+            mini=False,
+            args=None
     ):
         if lmdb_paths:
             lmdb_files = lmdb_paths
@@ -167,13 +169,13 @@ class ConceptCapLoaderTrain(object):
             #     rank = 0
             #     print(f"WARNING: only loading from {LMDB_PATHS[rank]}")
             #     # lmdb_file = "/mnt3/xuesheng/features_lmdb/CC/training_feat_part_0.lmdb" #Nathan
-            lmdb_files = LMDB_PATHS
-
+            lmdb_files = LMDB_PATHS if not mini else CENTI_LMDB_PATHS # MINI_LMDB_PATHS CENTI_LMDB_PATHS
+        self.args = args
         caption_path = CAPTION_PATH
         # caption_path = "/mnt3/xuesheng/features_lmdb/CC/caption_train.json"
-        print(f"Loading from{lmdb_files}")
+
         print("Shuffle: ", shuffle)
-        ds = MyLMDBSerializer.load(lmdb_files, shuffle=shuffle)
+        ds = MyLMDBSerializer.load(lmdb_files, shuffle=shuffle,args=self.args)
         self.num_dataset = len(ds)
         self.savePath = savePath
         preprocess_function = BertPreprocessBatch(
@@ -184,6 +186,7 @@ class ConceptCapLoaderTrain(object):
             self.num_dataset,
             encoding="utf-8",
             predict_feature=predict_feature,
+            args=args
         )
 
         # ds = td.LocallyShuffleData(ds, cache)
@@ -193,9 +196,10 @@ class ConceptCapLoaderTrain(object):
         # ds = td.PrefetchDataZMQ(ds, num_workers) Nathan commenting out in hope of bypassing forking-debugger incompatibility
         # self.ds = td.BatchData(ds, batch_size)
         if num_workers > 0:
+            raise NotImplementedError
             ds = MyMultiProcessRunnerZMQ(ds, num_workers)
-        if mini:
-            ds._size = MINI_SIZE
+        # if mini:
+        #     ds._size = MINI_SIZE
         self.ds = MyBatchData(ds, batch_size)
         # self.ds = ds
         self.ds.reset_state()
@@ -203,43 +207,44 @@ class ConceptCapLoaderTrain(object):
         self.batch_size = batch_size
         self.num_workers = num_workers
 
+    # @profile(stream=PROFILING_LOG_FILE_HANDLE)
+    # @profile
     def __iter__(self):
 
         s1 = t()
-        for batch in self.ds.get_data():
+        for batch in self.ds.get_data(): # adds about 57 MiB
             s = t()
-            input_ids, input_mask, segment_ids, lm_label_ids, is_next, image_feat, \
-            image_loc, image_target, image_label, image_mask, image_id, causal_label_t, causal_label_v = batch
-
-            batch_size = input_ids.shape[0]
-            g_image_feat = np.sum(image_feat, axis=1) / np.sum(image_mask, axis=1,
-                                                               keepdims=True)  # Average (g for global?) feat over all bboxes
-            # print(np.sum(image_feat, axis=1).shape, np.sum(image_mask, axis=1, keepdims=True).shape) #(64, 2048) (64, 1)
-            image_feat = np.concatenate([np.expand_dims(g_image_feat, axis=1), image_feat], axis=1)
-            image_feat = np.array(image_feat, dtype=np.float32)
-            # print(image_feat.shape) # (64, 37, 2048)
-
-            # g_image_feat_og = np.sum(image_feature_og, axis=1) / np.sum(image_mask, axis=1, keepdims=True)
-            # image_feature_og = np.concatenate([np.expand_dims(g_image_feat_og, axis=1), image_feature_og], axis=1)
-            # image_feature_og = np.array(image_feature_og, dtype=np.float32)
-
-            g_image_loc = np.repeat(np.array([[0, 0, 1, 1, 1]], dtype=np.float32), batch_size, axis=0)
-            image_loc = np.concatenate([np.expand_dims(g_image_loc, axis=1), image_loc], axis=1)
-
-            image_loc = np.array(image_loc, dtype=np.float32)
-            g_image_mask = np.repeat(np.array([[1]]), batch_size, axis=0)
-            image_mask = np.concatenate([g_image_mask, image_mask], axis=1)
-            # print(image_mask.shape) # (64, 37)
-
-            batch = (input_ids, input_mask, segment_ids, lm_label_ids, is_next, image_feat, image_loc, image_target, \
-                     image_label, image_mask, image_id, causal_label_t, causal_label_v)
-            to_yield = tuple(torch.tensor(data) for data in batch)
+            to_yield = self.globalize_and_tensorize(batch)
             between_yields_time = t() - s1
             concap_processing_time = t() - s
             my_maybe_print(f"ENTIRE BETWEEN-YIELD TIME WAS  {between_yields_time}")
             my_maybe_print(f"ConceptCapLoaderTrain time took {concap_processing_time}")
             yield to_yield
             s1 = t()
+
+    def globalize_and_tensorize(self, batch):
+        input_ids, input_mask, segment_ids, lm_label_ids, is_next, image_feat, \
+        image_loc, image_target, image_label, image_mask, image_id, causal_label_t, causal_label_v = batch
+        batch_size = input_ids.shape[0]
+        g_image_feat = np.sum(image_feat, axis=1) / np.sum(image_mask, axis=1,
+                                                           keepdims=True)  # Average (g for global?) feat over all bboxes
+        # print(np.sum(image_feat, axis=1).shape, np.sum(image_mask, axis=1, keepdims=True).shape) #(64, 2048) (64, 1)
+        image_feat = np.concatenate([np.expand_dims(g_image_feat, axis=1), image_feat], axis=1)
+        image_feat = np.array(image_feat, dtype=np.float32)  # these two steps add 40MiB CPU mem: +77 - 37
+        # print(image_feat.shape) # (64, 37, 2048)
+        # g_image_feat_og = np.sum(image_feature_og, axis=1) / np.sum(image_mask, axis=1, keepdims=True)
+        # image_feature_og = np.concatenate([np.expand_dims(g_image_feat_og, axis=1), image_feature_og], axis=1)
+        # image_feature_og = np.array(image_feature_og, dtype=np.float32)
+        g_image_loc = np.repeat(np.array([[0, 0, 1, 1, 1]], dtype=np.float32), batch_size, axis=0)
+        image_loc = np.concatenate([np.expand_dims(g_image_loc, axis=1), image_loc], axis=1)
+        image_loc = np.array(image_loc, dtype=np.float32)
+        g_image_mask = np.repeat(np.array([[1]]), batch_size, axis=0)
+        image_mask = np.concatenate([g_image_mask, image_mask], axis=1)
+        # print(image_mask.shape) # (64, 37)
+        batch = (input_ids, input_mask, segment_ids, lm_label_ids, is_next, image_feat, image_loc, image_target, \
+                 image_label, image_mask, image_id, causal_label_t, causal_label_v)
+        to_yield = tuple(torch.tensor(data) for data in batch)  # adds about 70 MiB
+        return to_yield
 
     def __len__(self):
         return self.ds.size()
@@ -646,7 +651,8 @@ class BertPreprocessBatch(object):
             split="Train",
             encoding="utf-8",
             predict_feature=False,
-            visualization=False
+            visualization=False,
+            args=None
     ):
         self.noun = np.load(ID2CLASS_PATH, allow_pickle=True).item()
         self.vocabulary_list = list(tokenizer.vocab.items())
@@ -659,6 +665,7 @@ class BertPreprocessBatch(object):
         self.captions = list(json.load(open(caption_path, 'r')).values())
         self.num_caps = len(self.captions)
         self.visualization = visualization
+        self.args = args
 
     def __call__(self, data):
         # s =t()
@@ -927,12 +934,9 @@ class BertPreprocessBatch(object):
 
         for i in range(num_boxes):
             prob = random.random()
-            # # mask token with 15% probability
-            # if prob < 0.15 and not self.visualization:
-            #     prob /= 0.15
-            # mask token with 15% probability CHANGED TO 0.3 as per instructions for second part
-            if prob < 0.3 and not self.visualization:
-                prob /= 0.3
+            # mask token with some probability. To reproduce DeVLBERT: 15% for first 12 epochs, and 30% for second 12 epochs
+            if prob < self.args.region_mask_prob and not self.visualization:
+                prob /= self.args.region_mask_prob
 
                 # 80% randomly change token to mask token
                 if prob < 0.9:

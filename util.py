@@ -13,11 +13,21 @@ import random
 import numpy as np
 from torch import distributed as dist
 import torch
-
+from constants import DEVLBERT_ROOT_DIR, HOST
 from pretorch_util import rank_to_device
 from tools.DownloadConcptualCaption.download_data import _file_name
+from pytorch_lightning.utilities.xla_device import XLADeviceUtils
 
-with open("/cw/liir/NoCsBack/testliir/nathan/p1_causality/DeVLBert/dic/objects_vocab.txt", "r") as vocab:
+def is_on_tpus() -> bool:
+    return XLADeviceUtils.tpu_device_exists()
+
+
+if is_on_tpus():
+    import torch_xla.core.xla_model as xm
+from datetime import datetime
+from pytz import timezone
+
+with open(f"{DEVLBERT_ROOT_DIR.as_posix()}/dic/objects_vocab.txt", "r") as vocab:
     CLASSES = ['background'] + [line.strip() for line in vocab]
 
 IMAGE_DIR = "/cw/liir/NoCsBack/testliir/datasets/ConceptualCaptions/training"
@@ -33,15 +43,24 @@ def distributed(args) -> bool:
 
 
 def myprint(*msg):
-    rank = get_rank()
-    pre_msg = f'rank {rank} pid {os.getpid()},{strftime("%d %H:%M:%S")}: '
+    pre_msg = _get_pre_msg()
     print(pre_msg, *msg)
 
 
-def my_maybe_print(msg):
+def my_maybe_print(*msg):
+    pass
+    # pre_msg = _get_pre_msg()
+    # print(pre_msg, *msg)
+
+
+
+def _get_pre_msg():
     rank = get_rank()
-    pre_msg = f'rank {rank} pid {os.getpid()},{strftime("%d %H:%M:%S")}: '
-    # print(pre_msg + msg)
+    pre_msg = f'rank {rank} ' \
+              f'pid {os.getpid()},' \
+              f'{datetime.now(timezone("Europe/Brussels")).strftime("%d %H:%M:%S")}: '
+    return pre_msg
+
 
 class MyLogger(Logger):
     def debug(self, msg, *args, **kwargs):
@@ -99,19 +118,29 @@ def open_tsv(fname, folder):
 
 
 def get_world_size() -> int:
-    if not dist.is_available():
-        return 1
-    if not dist.is_initialized():
-        return 1
-    return dist.get_world_size()
+    if not is_on_tpus():
+        if not dist.is_available():
+            return 1
+        if not dist.is_initialized():
+            return 1
+        return dist.get_world_size()
+    else:
+        return xm.xrt_world_size()
 
 
 def get_rank() -> int:
-    if not dist.is_available():
-        return 0
-    if not dist.is_initialized():
-        return 0
-    return torch.distributed.get_rank()
+    if not is_on_tpus():
+        if not dist.is_available():
+            return 0
+        if not dist.is_initialized():
+            return 0
+        return torch.distributed.get_rank()
+    else:
+        return xm.get_ordinal()
+
+
+def is_master_rank() -> bool:
+    return get_rank() == 0
 
 
 def setup(rank, world_size):
@@ -124,3 +153,24 @@ def setup(rank, world_size):
 
 def cleanup():
     dist.destroy_process_group()
+
+
+def sz(num, suffix='B'):
+    for unit in ['', 'Ki', 'Mi', 'Gi', 'Ti', 'Pi', 'Ei', 'Zi']:
+        if abs(num) < 1024.0:
+            return "%3.1f%s%s" % (num, unit, suffix)
+        num /= 1024.0
+    return "%.1f%s%s" % (num, 'Yi', suffix)
+
+def print_gpu_mem():
+    if HOST == 'VSC':
+        totmem = torch.cuda.get_device_properties(0).total_memory
+        r = torch.cuda.memory_reserved(0)
+        a = torch.cuda.memory_allocated(0)
+        f = r - a  # free inside reserved
+        myprint(f""
+                f"Total mem: {sz(totmem)}\t"
+                f"Reserved mem: {sz(r)}\t"
+                f"Allocated mem: {sz(a)}\t"
+                f"Free inside reserved: {sz(f)}"
+                f"")

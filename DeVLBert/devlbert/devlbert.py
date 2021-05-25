@@ -14,11 +14,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 """PyTorch BERT model."""
+import re
+from constants import PROFILING_LOG_FILE_HANDLE, memprof_log_handle_for_name
+# from memory_profiler import profile
+
 from pytorch_pretrained_bert.optimization import BertAdam
 import pytorch_lightning as pl
 # from deepspeed.ops.adam import FusedAdam
 import copy
-from time import sleep
 
 import json
 import logging
@@ -35,10 +38,11 @@ from torch import nn
 from torch.nn import CrossEntropyLoss
 import torch.nn.functional as F
 from torch.nn.utils.weight_norm import weight_norm
-from util import myprint
+from util import is_master_rank, my_maybe_print
+from datetime import datetime
+from pytz import timezone
 
 from .utils import cached_path
-import pdb
 import numpy as np
 
 logger = logging.getLogger(__name__)
@@ -920,7 +924,7 @@ class BertEncoder(nn.Module):
             all_encoder_layers_v.append(image_embedding)
 
         return all_encoder_layers_t, all_encoder_layers_v, (
-        all_attention_mask_t, all_attnetion_mask_v, all_attention_mask_c)
+            all_attention_mask_t, all_attnetion_mask_v, all_attention_mask_c)
 
 
 class BertTextPooler(nn.Module):
@@ -1126,7 +1130,7 @@ class BertImagePredictionHead(nn.Module):
 
 class BertPreTrainedModel(nn.Module):
     """ An abstract class to handle weights initialization and
-        a simple interface for dowloading and loading pretrained models.
+        a simple interface for downloading and loading pretrained models.
     """
 
     def __init__(self, config, default_gpu=True, *inputs, **kwargs):
@@ -1312,17 +1316,37 @@ class BertPreTrainedModel(nn.Module):
             start_prefix = "bert."
         load(model, prefix=start_prefix)
         if len(missing_keys) > 0 and default_gpu:
-            logger.info(
-                "Weights of {} not initialized from pretrained model: {}".format(
-                    model.__class__.__name__, missing_keys
-                )
-            )
+            # logger.info(
+            #     "Weights of {} not initialized from pretrained model: {}".format(
+            #         model.__class__.__name__, missing_keys
+            #     )
+            # )
+            # Nathan
+            allowed_missing = ["bert.v_embeddings.*",
+                               "bert.encoder.v_layer.*",
+                               "bert.encoder.c_layer.*",
+                               "bert.t_pooler.*",
+                               "bert.v_pooler.*",
+                               "cls.causal_predictor_t2v.*",
+                               "cls.causal_predictor_t.*",
+                               "cls.causal_predictor_v.*",
+                               "cls.causal_predictor_v2t.*",
+                               "cls.bi_seq_relationship.*",
+                               "cls.imagePredictions.*",
+                               "causal_*"]
+            assert all([any([bool(re.match(am,mk)) for am in allowed_missing]) for mk in missing_keys]), "Some unallowed keys missing from pretrained model"
+
         if len(unexpected_keys) > 0 and default_gpu:
-            logger.info(
-                "Weights from pretrained model not used in {}: {}".format(
-                    model.__class__.__name__, unexpected_keys
-                )
-            )
+            # logger.info(
+            #     "Weights from pretrained model not used in {}: {}".format(
+            #         model.__class__.__name__, unexpected_keys
+            #     )
+            # )
+            allowed_unexpected = ['bert.pooler.dense.weight',
+                                  'bert.pooler.dense.bias',
+                                  'cls.seq_relationship.weight',
+                                  'cls.seq_relationship.bias']
+            assert all([uk in allowed_unexpected for uk in unexpected_keys]), "Some unallowed unexpected keys in pretrained model" #Nathan
         if len(error_msgs) > 0 and default_gpu:
             raise RuntimeError(
                 "Error(s) in loading state_dict for {}:\n\t{}".format(
@@ -1651,6 +1675,7 @@ class BertForMultiModalPreTraining(BertPreTrainedModel, pl.LightningModule):
             self.vis_criterion = nn.MSELoss(reduction="none")
         else:
             self.vis_criterion = nn.KLDivLoss(reduction="none")
+        # self.save_hyperparameters()
 
     def setup(self, stage):
         if stage == 'fit':
@@ -1661,6 +1686,7 @@ class BertForMultiModalPreTraining(BertPreTrainedModel, pl.LightningModule):
                     )
                     * self.args.num_train_epochs
             )  # TODO check if this is correct
+        # self.save_hyperparameters()
 
     @classmethod
     def add_model_specific_args(cls, parent_parser):
@@ -1670,6 +1696,8 @@ class BertForMultiModalPreTraining(BertPreTrainedModel, pl.LightningModule):
         # parser.add_argument('--data_path', type=str, default='/some/path')
         return parent_parser
 
+    # @profile(stream=memprof_log_handle_for_name('forward'))
+    # @profile
     def forward(
             self,
             input_ids,
@@ -1758,13 +1786,24 @@ class BertForMultiModalPreTraining(BertPreTrainedModel, pl.LightningModule):
         else:
             return prediction_scores_t, prediction_scores_v, seq_relationship_score, all_attention_mask
 
+    # @profile(stream=memprof_log_handle_for_name('training_step'))
+    # @profile
     def training_step(self, batch, batch_idx):
         input_ids, input_mask, segment_ids, lm_label_ids, is_next, image_feat, image_loc, image_target, image_label, image_mask, \
         image_ids, causal_label_t, causal_label_v = (
             batch
         )
+        # p = '/home/nathan_e_d_cornille_gmail_com/p1_causality/DeVLBert/tmp_check_ids.txt'
+        # with open(p, 'a') as f:
+        #     for image_id in image_ids:
+        #         f.write(f'{image_id.cpu().numpy()}\n')
+
+        # with open(p, 'r') as f:
+        #     idss = f.readlines()
+        #
+        # len(set(idss))
         s = t()
-        myprint(f'Doing Model input --> model output losses')
+        my_maybe_print(f'Doing Model input --> model output losses')
         # myprint(str(list(model.module.parameters())[0].device))
         # myprint(str(input_ids.device))
         # skip_sleep = False
@@ -1789,27 +1828,33 @@ class BertForMultiModalPreTraining(BertPreTrainedModel, pl.LightningModule):
             causal_label_t,
             causal_label_v
         )
-        myprint(f'Model input --> model output losses took {t() - s}')
+        my_maybe_print(f'Model input --> model output losses took {t() - s}')
 
         masked_loss_v = masked_loss_v * self.args.img_weight
         loss = masked_loss_t + masked_loss_v + next_sentence_loss + \
                causal_prediction_v_loss + causal_prediction_t_loss + \
                causal_prediction_v2t_loss + causal_prediction_t2v_loss
 
-        s = t()
 
         # region tboard logging
-        myprint(f"tboard logging ...")
-        self.log("loss", loss.item())
-        self.log("masked_loss_t", masked_loss_t.item())
-        self.log("masked_loss_v", masked_loss_v.item())
-        self.log("next_sentence_loss", next_sentence_loss.item())
-        self.log("causal_prediction_v_loss", causal_prediction_v_loss.item())
-        self.log("causal_prediction_t_loss", causal_prediction_t_loss.item())
-        self.log("causal_prediction_v2t_loss", causal_prediction_v2t_loss.item())
-        self.log("causal_prediction_t2v_loss", causal_prediction_t2v_loss.item())
-        myprint(f"tboard logging took {t() - s}")
+        if is_master_rank() and self.trainer.logger_connector.should_update_logs: # and not self.args.mini: # skip when debugging as this involves moving to cpu which takes quite a long time the first time round
+            s = t()
+            my_maybe_print(f"tboard logging ...")
+            self.log("loss", loss)
+            self.log("masked_loss_t", masked_loss_t)
+            self.log("masked_loss_v", masked_loss_v)
+            self.log("next_sentence_loss", next_sentence_loss)
+            self.log("causal_prediction_v_loss", causal_prediction_v_loss)
+            self.log("causal_prediction_t_loss", causal_prediction_t_loss)
+            self.log("causal_prediction_v2t_loss", causal_prediction_v2t_loss)
+            self.log("causal_prediction_t2v_loss", causal_prediction_t2v_loss)
+            my_maybe_print(f"tboard logging took {t() - s}")
         # endregion
+        # else:
+        #     myprint("*"*50, "STOPPING NON-MASTER PROCESSES FOR EASY DEBUGGING", "*"*50)
+        #     stop = True
+        #     while stop:
+        #         sleep(10)
 
         return {'loss': loss}
 
@@ -1884,6 +1929,11 @@ class BertForMultiModalPreTraining(BertPreTrainedModel, pl.LightningModule):
         return optimizer
         # return torch.optim.Adam(self.parameters(),lr=self.args.learning_rate)
 
+    def get_progress_bar_dict(self):
+        tqdm_dict = super().get_progress_bar_dict()
+        tqdm_dict['t'] = datetime.now(timezone('Europe/Brussels')).strftime("%X")
+        return tqdm_dict
+
 
 class DeVLBertForVLTasks(BertPreTrainedModel):
     def __init__(self, config, num_labels, dropout_prob=0.1, default_gpu=True):
@@ -1938,7 +1988,7 @@ class DeVLBertForVLTasks(BertPreTrainedModel):
         vil_prediction = self.vil_prediction(pooled_output)
         vil_logit = self.vil_logit(pooled_output)
         vision_logit = self.vision_logit(self.dropout(sequence_output_v)) + (
-                    (1.0 - image_attention_mask) * -10000.0).unsqueeze(2).to(dtype=next(self.parameters()).dtype)
+                (1.0 - image_attention_mask) * -10000.0).unsqueeze(2).to(dtype=next(self.parameters()).dtype)
         linguisic_logit = self.linguisic_logit(self.dropout(sequence_output_t))
 
         return vil_prediction, vil_logit, vil_binary_prediction, vision_prediction, vision_logit, linguisic_prediction, linguisic_logit

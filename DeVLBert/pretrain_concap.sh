@@ -1,14 +1,6 @@
-python train_concap.py \
-  --trainer.accelerator 'ddp' \
-  --trainer.gpus -1 \
-  --trainer.num_nodes 1 \
-  --trainer.max_epochs 24 \
-  --from_pretrained bert-base-uncased \
-  --bert_model bert-base-uncased \
-  --config_file config/bert_base_6layer_6conect.json \
-  --learning_rate 1e-4 \
-  --train_batch_size 64 \
-  --save_name devlbert_base \
-  --distributed \
-  --checkpoint_period 100 \
-  --continue_training
+# Parameters not specified here are in DeVLBert/config/pretrain_concap_devlbert.yml
+# first step
+python train_concap.py --config config/pretrain_concap_devlbert.yml --region_mask_prob .15
+# second step
+# change region mask probability from 0.15 to 0.3
+python train_concap.py --config config/pretrain_concap_devlbert.yml --region_mask_prob .3
