@@ -57,7 +57,7 @@ trainer:
   weights_summary: top
 baseline: false
 bert_model: bert-base-uncased
-checkpoint_period: 3600
+checkpoint_every_n_train_steps: 0
 config: null
 config_file: config/bert_base_6layer_6conect.json
 continue_training: false
@@ -87,4 +87,3 @@ use_chuncks: 0
 validation_file: data/validation
 warmup_proportion: 0.1
 without_coattention: false
-world_size: 2

@@ -169,7 +169,7 @@ class ConceptCapLoaderTrain(object):
             #     rank = 0
             #     print(f"WARNING: only loading from {LMDB_PATHS[rank]}")
             #     # lmdb_file = "/mnt3/xuesheng/features_lmdb/CC/training_feat_part_0.lmdb" #Nathan
-            lmdb_files = LMDB_PATHS if not mini else CENTI_LMDB_PATHS # MINI_LMDB_PATHS CENTI_LMDB_PATHS
+            lmdb_files = LMDB_PATHS if not mini else MINI_LMDB_PATHS # MINI_LMDB_PATHS CENTI_LMDB_PATHS
         self.args = args
         caption_path = CAPTION_PATH
         # caption_path = "/mnt3/xuesheng/features_lmdb/CC/caption_train.json"
@@ -666,6 +666,10 @@ class BertPreprocessBatch(object):
         self.num_caps = len(self.captions)
         self.visualization = visualization
         self.args = args
+        if self.args is None:
+            self.region_mask_prob = 0.15
+        else:
+            self.region_mask_prob = self.args.region_mask_prob
 
     def __call__(self, data):
         # s =t()
@@ -935,8 +939,8 @@ class BertPreprocessBatch(object):
         for i in range(num_boxes):
             prob = random.random()
             # mask token with some probability. To reproduce DeVLBERT: 15% for first 12 epochs, and 30% for second 12 epochs
-            if prob < self.args.region_mask_prob and not self.visualization:
-                prob /= self.args.region_mask_prob
+            if prob < self.region_mask_prob and not self.visualization:
+                prob /= self.region_mask_prob
 
                 # 80% randomly change token to mask token
                 if prob < 0.9:

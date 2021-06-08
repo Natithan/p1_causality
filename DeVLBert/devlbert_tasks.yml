@@ -3,9 +3,9 @@ TASK0:
   type: VL-classifier
   loss: BCEWithLogitLoss
   task_id: 1
-  dataroot: /cw/working-gimli/nathan/downstream_data/datasets/VQA/
-#  features_h5path1: /cw/working-gimli/nathan/downstream_data/datasets/coco/coco_trainval_resnet101_faster_rcnn_genome.lmdb
-  features_h5path1: /cw/working-gimli/nathan/downstream_data/datasets/coco/coco_test_resnet101_faster_rcnn_genome.lmdb
+  dataroot: __ROOT__/datasets/VQA/
+  train_features_h5path1: __ROOT__/datasets/coco/coco_trainval_resnet101_faster_rcnn_genome.lmdb
+  eval_features_h5path1: __ROOT__/datasets/coco/coco_test_resnet101_faster_rcnn_genome.lmdb
   features_h5path2: ''
   train_annotations_jsonpath: ''
   val_annotations_jsonpath: ''
@@ -58,13 +58,13 @@ TASK3:
   type: VL-logit
   loss: CrossEntropyLoss
   task_id: 9
-  dataroot: /cw/working-gimli/nathan/downstream_data/datasets/flickr30k
-#  features_h5path1: /cw/working-gimli/nathan/downstream_data/datasets/flickr30k/flickr30k_resnet101_faster_rcnn_genome.lmdb
-  features_h5path1: /cw/working-gimli/nathan/downstream_data/datasets/flickr30k/flickr30k_test_resnet101_faster_rcnn_genome.lmdb
+  dataroot: __ROOT__/datasets/flickr30k
+  train_features_h5path1: __ROOT__/datasets/flickr30k/flickr30k_resnet101_faster_rcnn_genome.lmdb
+  eval_features_h5path1: __ROOT__/datasets/flickr30k/flickr30k_test_resnet101_faster_rcnn_genome.lmdb
   features_h5path2: ''
-  train_annotations_jsonpath: /cw/working-gimli/nathan/downstream_data/datasets/flickr30k/all_data_final_train_2014.jsonline
-#  val_annotations_jsonpath: /cw/working-gimli/nathan/downstream_data/datasets/flickr30k/all_data_final_val_set0_2014.jsonline
-  val_annotations_jsonpath: /cw/working-gimli/nathan/downstream_data/datasets/flickr30k/all_data_final_test_set0_2014.jsonline
+  train_annotations_jsonpath: __ROOT__/datasets/flickr30k/all_data_final_train_2014.jsonline
+  train_val_annotations_jsonpath: __ROOT__/datasets/flickr30k/all_data_final_val_set0_2014.jsonline
+  eval_val_annotations_jsonpath: __ROOT__/datasets/flickr30k/all_data_final_test_set0_2014.jsonline
   max_seq_length: 30
   max_region_num: 100
 #  batch_size: 64

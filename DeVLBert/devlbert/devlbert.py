@@ -14,9 +14,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 """PyTorch BERT model."""
+import glob
 import re
 from constants import PROFILING_LOG_FILE_HANDLE, memprof_log_handle_for_name
 # from memory_profiler import profile
+from my_lmdb import get_core_ds
+from pytorch_pretrained_bert import BertTokenizer
 
 from pytorch_pretrained_bert.optimization import BertAdam
 import pytorch_lightning as pl
@@ -38,10 +41,10 @@ from torch import nn
 from torch.nn import CrossEntropyLoss
 import torch.nn.functional as F
 from torch.nn.utils.weight_norm import weight_norm
-from util import is_master_rank, my_maybe_print
-from datetime import datetime
-from pytz import timezone
+from util import is_master_rank, my_maybe_print, myprint
 
+from .myplmodule import PLBertForMultimodalPretraining
+from .task_utils import compute_score_with_logits
 from .utils import cached_path
 import numpy as np
 
@@ -1221,19 +1224,20 @@ class BertPreTrainedModel(nn.Module):
             )
             return None
 
-        if default_gpu:
-            if resolved_archive_file == archive_file:
-                logger.info("loading archive file {}".format(archive_file))
-            else:
-                logger.info(
-                    "loading archive file {} from cache at {}".format(
-                        archive_file, resolved_archive_file
-                    )
-                )
+        # if default_gpu:
+        #     if resolved_archive_file == archive_file:
+        #         # logger.info("loading archive file {}".format(archive_file))
+        #     else:
+        #         # logger.info(
+        #         #     "loading archive file {} from cache at {}".format(
+        #         #         archive_file, resolved_archive_file
+        #         #     )
+        #         # )
         tempdir = None
         if os.path.isdir(resolved_archive_file) or from_tf:
             serialization_dir = resolved_archive_file
-        elif resolved_archive_file[-3:] == 'bin':
+        # elif resolved_archive_file[-3:] == 'bin':
+        elif any(resolved_archive_file.endswith(ending) for ending in ('bin','ckpt')): # Nathan
             serialization_dir = '/'.join(resolved_archive_file.split('/')[:-1])
             WEIGHTS_NAME = resolved_archive_file.split('/')[-1]
         else:
@@ -1250,8 +1254,8 @@ class BertPreTrainedModel(nn.Module):
         # Load config
         # config_file = os.path.join(serialization_dir, CONFIG_NAME)
         # config = BertConfig.from_json_file(config_file)
-        if default_gpu:
-            logger.info("Model config {}".format(config))
+        # if default_gpu:
+        #     logger.info("Model config {}".format(config))
         # Instantiate model.
         model = cls(config, *inputs, **kwargs)
         if state_dict is None and not from_tf:
@@ -1262,6 +1266,8 @@ class BertPreTrainedModel(nn.Module):
             )
             if 'state_dict' in dir(state_dict):
                 state_dict = state_dict.state_dict()
+            elif 'state_dict' in state_dict: # Nathan
+                state_dict = state_dict['state_dict']
 
         if tempdir:
             # Clean up temp dir
@@ -1322,7 +1328,9 @@ class BertPreTrainedModel(nn.Module):
             #     )
             # )
             # Nathan
-            allowed_missing = ["bert.v_embeddings.*",
+            allowed_missing = [
+                                # For loading og pretrained for concap-extra-pretraining"
+                               "bert.v_embeddings.*",
                                "bert.encoder.v_layer.*",
                                "bert.encoder.c_layer.*",
                                "bert.t_pooler.*",
@@ -1333,8 +1341,15 @@ class BertPreTrainedModel(nn.Module):
                                "cls.causal_predictor_v2t.*",
                                "cls.bi_seq_relationship.*",
                                "cls.imagePredictions.*",
-                               "causal_*"]
-            assert all([any([bool(re.match(am,mk)) for am in allowed_missing]) for mk in missing_keys]), "Some unallowed keys missing from pretrained model"
+                               "causal_*",
+                               # For loading concap-pretrained for ir-task-training
+                               "vil_prediction.*",
+                               "vil_logit.*",
+                               "vision_logit.*",
+                               "linguisic_logit.*" #sic
+                               ]
+            assert all([any([bool(re.match(am, mk)) for am in allowed_missing]) for mk in
+                        missing_keys]), "Some unallowed keys missing from pretrained model"
 
         if len(unexpected_keys) > 0 and default_gpu:
             # logger.info(
@@ -1342,11 +1357,21 @@ class BertPreTrainedModel(nn.Module):
             #         model.__class__.__name__, unexpected_keys
             #     )
             # )
-            allowed_unexpected = ['bert.pooler.dense.weight',
-                                  'bert.pooler.dense.bias',
-                                  'cls.seq_relationship.weight',
-                                  'cls.seq_relationship.bias']
-            assert all([uk in allowed_unexpected for uk in unexpected_keys]), "Some unallowed unexpected keys in pretrained model" #Nathan
+            allowed_unexpected = [
+                                # For loading og pretrained for concap-extra-pretraining"
+                                'bert.pooler.dense.weight',
+                                'bert.pooler.dense.bias',
+                                'cls.seq_relationship.weight',
+                                'cls.seq_relationship.bias',
+                               # For loading concap-pretrained for ir-task-training
+                               "causal_*",
+
+            ]
+            # assert all([uk in allowed_unexpected for uk in
+            #             unexpected_keys]), "Some unallowed unexpected keys in pretrained model"  # Nathan
+
+            assert all([any([bool(re.match(au, uk)) for au in allowed_unexpected]) for uk in
+                        unexpected_keys]), "Some unallowed keys missing from pretrained model"
         if len(error_msgs) > 0 and default_gpu:
             raise RuntimeError(
                 "Error(s) in loading state_dict for {}:\n\t{}".format(
@@ -1520,14 +1545,14 @@ class BertImageEmbeddings(nn.Module):
 
 
 class Causal_v(nn.Module):
-    def __init__(self):
+    def __init__(self,args):
         super(Causal_v, self).__init__()
         self.embedding_size = 1024
         self.Wy = nn.Linear(1024, 1024)
         self.Wz = nn.Linear(2048, 1024)
         # self.dic_z = torch.tensor(np.load("./dic/dic_v.npy"), dtype=torch.float).cuda() # Nathan
         # self.prior = torch.tensor(np.load("./dic/prior_v.npy"), dtype=torch.float).cuda()
-
+        self.args = args
         # Following  https://pytorch-lightning.readthedocs.io/en/latest/advanced/multi_gpu.html#init-tensors-using-type-as-and-register-buffer
         self.register_buffer("dic_z", torch.tensor(np.load("./dic/dic_v.npy"), dtype=torch.float))
         self.register_buffer("prior", torch.tensor(np.load("./dic/prior_v.npy"), dtype=torch.float))
@@ -1544,16 +1569,21 @@ class Causal_v(nn.Module):
         for boxes in y:
             attention = torch.mm(self.Wy(boxes), self.Wz(self.dic_z).t()) / (self.embedding_size ** 0.5)
             attention = F.softmax(attention, 1)  # torch.Size([box, 1601])
-            z_hat = attention.unsqueeze(2) * self.dic_z.unsqueeze(0)  # torch.Size([box, 1601, 2048])
-            z = torch.matmul(self.prior.unsqueeze(0), z_hat).squeeze(
-                1)  # torch.Size([box, 1, 2048])->torch.Size([box, 2048])
+            z_hat = attention.unsqueeze(2) * self.dic_z.unsqueeze(0)
+            # torch.Size([box, 1601, 2048])
+            # Nathan
+            if self.args.no_prior:
+                z = torch.mean(z_hat,1).shape
+            else:
+                z = torch.matmul(self.prior.unsqueeze(0), z_hat).squeeze(
+                    1)  # torch.Size([box, 1, 2048])->torch.Size([box, 2048])
             temp.append(z)
         temp = torch.stack(temp, 0)
         return temp
 
 
 class Causal_t(nn.Module):
-    def __init__(self):
+    def __init__(self,args):
         super(Causal_t, self).__init__()
         self.embedding_size = 768
         self.Wy = nn.Linear(768, 768)
@@ -1561,6 +1591,7 @@ class Causal_t(nn.Module):
         # self.dic_z = torch.tensor(np.load("./dic/dic_t.npy"), dtype=torch.float).cuda()
         # self.prior = torch.tensor(np.load("./dic/prior_t.npy"), dtype=torch.float).cuda() # Nathan
 
+        self.args = args
         # Following  https://pytorch-lightning.readthedocs.io/en/latest/advanced/multi_gpu.html#init-tensors-using-type-as-and-register-buffer
         self.register_buffer("dic_z", torch.tensor(np.load("./dic/dic_t.npy"), dtype=torch.float))
         self.register_buffer("prior", torch.tensor(np.load("./dic/prior_t.npy"), dtype=torch.float))
@@ -1576,7 +1607,11 @@ class Causal_t(nn.Module):
             attention = torch.mm(self.Wy(sentence), self.Wz(self.dic_z).t()) / (self.embedding_size ** 0.5)
             attention = F.softmax(attention, 1)  # torch.Size([box, 1601])
             z_hat = attention.unsqueeze(2) * self.dic_z.unsqueeze(0)  # torch.Size([box, 1601, 2048])
-            z = torch.matmul(self.prior.unsqueeze(0), z_hat).squeeze(
+            # Nathan
+            if self.args.no_prior:
+                z = torch.mean(z_hat,1).shape
+            else:
+                z = torch.matmul(self.prior.unsqueeze(0), z_hat).squeeze(
                 1)  # torch.Size([box, 1, 2048])->torch.Size([box, 2048]) # TODO fix RuntimeError: mat1 dim 1 must match mat2 dim 0
             temp.append(z)
         temp = torch.stack(temp, 0)
@@ -1584,12 +1619,13 @@ class Causal_t(nn.Module):
 
 
 class Causal_t2v(nn.Module):
-    def __init__(self):
+    def __init__(self,args):
         super(Causal_t2v, self).__init__()
         self.embedding_size = 768
         self.Wy = nn.Linear(768, 768)
         self.Wz = nn.Linear(2048, 768)
         self.t2v = nn.Linear(2048, 768)
+        self.args = args
         # self.dic_z = torch.tensor(np.load("./dic/dic_v.npy"), dtype=torch.float).cuda()
         # self.prior = torch.tensor(np.load("./dic/prior_v.npy"), dtype=torch.float).cuda()
         # Following  https://pytorch-lightning.readthedocs.io/en/latest/advanced/multi_gpu.html#init-tensors-using-type-as-and-register-buffer
@@ -1608,7 +1644,11 @@ class Causal_t2v(nn.Module):
             attention = torch.mm(self.Wy(boxes), self.Wz(self.dic_z).t()) / (self.embedding_size ** 0.5)
             attention = F.softmax(attention, 1)  # torch.Size([box, 1601])
             z_hat = attention.unsqueeze(2) * self.t2v(self.dic_z).unsqueeze(0)  # torch.Size([box, 1601, 2048])
-            z = torch.matmul(self.prior.unsqueeze(0), z_hat).squeeze(
+            # Nathan
+            if self.args.no_prior:
+                z = torch.mean(z_hat,1).shape
+            else:
+                z = torch.matmul(self.prior.unsqueeze(0), z_hat).squeeze(
                 1)  # torch.Size([box, 1, 2048])->torch.Size([box, 2048])
             temp.append(z)
         temp = torch.stack(temp, 0)
@@ -1616,12 +1656,13 @@ class Causal_t2v(nn.Module):
 
 
 class Causal_v2t(nn.Module):
-    def __init__(self):
+    def __init__(self,args):
         super(Causal_v2t, self).__init__()
         self.embedding_size = 1024
         self.Wy = nn.Linear(1024, 1024)
         self.Wz = nn.Linear(768, 1024)
         self.v2t = nn.Linear(768, 1024)
+        self.args = args
         # self.dic_z = torch.tensor(np.load("./dic/dic_t.npy"), dtype=torch.float).cuda()
         # self.prior = torch.tensor(np.load("./dic/prior_t.npy"), dtype=torch.float).cuda()
         # Following  https://pytorch-lightning.readthedocs.io/en/latest/advanced/multi_gpu.html#init-tensors-using-type-as-and-register-buffer
@@ -1639,15 +1680,20 @@ class Causal_v2t(nn.Module):
             attention = torch.mm(self.Wy(sentence), self.Wz(self.dic_z).t()) / (self.embedding_size ** 0.5)
             attention = F.softmax(attention, 1)  # torch.Size([box, 1601])
             z_hat = attention.unsqueeze(2) * self.v2t(self.dic_z).unsqueeze(0)  # torch.Size([box, 1601, 2048])
-            z = torch.matmul(self.prior.unsqueeze(0), z_hat).squeeze(
+            # Nathan
+            if self.args.no_prior:
+                z = torch.mean(z_hat,1).shape
+            else:
+                z = torch.matmul(self.prior.unsqueeze(0), z_hat).squeeze(
                 1)  # torch.Size([box, 1, 2048])->torch.Size([box, 2048])
             temp.append(z)
         temp = torch.stack(temp, 0)
         return temp
 
 
-# noinspection PyAttributeOutsideInit
-class BertForMultiModalPreTraining(BertPreTrainedModel, pl.LightningModule):
+
+
+class BertForMultiModalPreTraining(BertPreTrainedModel, PLBertForMultimodalPretraining):
     """BERT model with multi modal pre-training heads.
     """
 
@@ -1663,10 +1709,10 @@ class BertForMultiModalPreTraining(BertPreTrainedModel, pl.LightningModule):
         self.predict_feature = config.predict_feature
         self.loss_fct = CrossEntropyLoss(ignore_index=-1)
 
-        self.causal_v = Causal_v()
-        self.causal_t = Causal_t()
-        self.causal_t2v = Causal_t2v()
-        self.causal_v2t = Causal_v2t()
+        self.causal_v = Causal_v(args)
+        self.causal_t = Causal_t(args)
+        self.causal_t2v = Causal_t2v(args)
+        self.causal_v2t = Causal_v2t(args)
         self.args = args
         #
         # print("model's option for predict_feature is ", config.predict_feature)
@@ -1676,25 +1722,19 @@ class BertForMultiModalPreTraining(BertPreTrainedModel, pl.LightningModule):
         else:
             self.vis_criterion = nn.KLDivLoss(reduction="none")
         # self.save_hyperparameters()
+        self.train_dataset = None
 
-    def setup(self, stage):
-        if stage == 'fit':
-            self.num_train_optimization_steps = (
-                    int(
-                        len(self.train_dataloader())
-                        / self.args.gradient_accumulation_steps
-                    )
-                    * self.args.num_train_epochs
-            )  # TODO check if this is correct
-        # self.save_hyperparameters()
 
-    @classmethod
-    def add_model_specific_args(cls, parent_parser):
-        parser = parent_parser.add_argument_group(cls.__name__)
-        raise NotImplementedError
-        # parser.add_argument('--encoder_layers', type=int, default=12) #TODO
-        # parser.add_argument('--data_path', type=str, default='/some/path')
-        return parent_parser
+    # def get_batch_idx_start(self):
+    #     core_ds = get_core_ds(self.train_dataset)
+    #     batch_size = self.train_dataset.batch_size
+    #     epoch_yield_count = core_ds.data_index['epoch_yield_count']
+    #     nb_processes = core_ds.nb_processes
+    #     total_batch_size = batch_size * nb_processes
+    #     batch_idx_start = (epoch_yield_count // total_batch_size)
+    #     return batch_idx_start
+
+
 
     # @profile(stream=memprof_log_handle_for_name('forward'))
     # @profile
@@ -1835,9 +1875,8 @@ class BertForMultiModalPreTraining(BertPreTrainedModel, pl.LightningModule):
                causal_prediction_v_loss + causal_prediction_t_loss + \
                causal_prediction_v2t_loss + causal_prediction_t2v_loss
 
-
         # region tboard logging
-        if is_master_rank() and self.trainer.logger_connector.should_update_logs: # and not self.args.mini: # skip when debugging as this involves moving to cpu which takes quite a long time the first time round
+        if is_master_rank() and self.trainer.logger_connector.should_update_logs:  # and not self.args.mini: # skip when debugging as this involves moving to cpu which takes quite a long time the first time round
             s = t()
             my_maybe_print(f"tboard logging ...")
             self.log("loss", loss)
@@ -1858,81 +1897,7 @@ class BertForMultiModalPreTraining(BertPreTrainedModel, pl.LightningModule):
 
         return {'loss': loss}
 
-    def configure_optimizers(self):
-        bert_weight_name = json.load(open("config/" + "bert-base-uncased_weight_name.json", "r"))
 
-        no_decay = ["bias", "LayerNorm.bias", "LayerNorm.weight"]
-        if self.args.freeze != -1:
-            bert_weight_name_filtered = []
-            for name in bert_weight_name:
-                if 'embeddings' in name:
-                    bert_weight_name_filtered.append(name)
-                elif 'encoder' in name:
-                    layer_num = name.split('.')[2]
-                    if int(layer_num) <= self.args.freeze:
-                        bert_weight_name_filtered.append(name)
-
-            for key, value in dict(self.named_parameters()).items():
-                if key[12:] in bert_weight_name_filtered:
-                    value.requires_grad = False
-        if not self.args.from_pretrained:
-            param_optimizer = list(self.named_parameters())
-            optimizer_grouped_parameters = [
-                {
-                    "params": [
-                        p for n, p in param_optimizer if not any(nd in n for nd in no_decay)
-                    ],
-                    "weight_decay": 0.01,
-                },
-                {
-                    "params": [
-                        p for n, p in param_optimizer if any(nd in n for nd in no_decay)
-                    ],
-                    "weight_decay": 0.0,
-                },
-            ]
-        else:
-            optimizer_grouped_parameters = []
-            for key, value in dict(self.named_parameters()).items():
-                if value.requires_grad:
-                    # if key[12:] in bert_weight_name:
-                    if key[5:] in bert_weight_name:  # Nathan: starts with "bert.", guess the 12: was for an old version
-                        lr = self.args.learning_rate * 0.1
-                    else:
-                        lr = self.args.learning_rate
-
-                    if any(nd in key for nd in no_decay):
-                        optimizer_grouped_parameters += [
-                            {"params": [value], "lr": lr, "weight_decay": 0.01}
-                        ]
-
-                    if not any(nd in key for nd in no_decay):
-                        optimizer_grouped_parameters += [
-                            {"params": [value], "lr": lr, "weight_decay": 0.0}
-                        ]
-            assert len(list(self.named_parameters())) == len(optimizer_grouped_parameters)
-
-        num_train_optimization_steps = (
-                int(
-                    len(self.train_dataloader())
-                    / self.args.gradient_accumulation_steps
-                )
-                * self.args.num_train_epochs
-        )
-
-        optimizer = BertAdam(
-            optimizer_grouped_parameters,
-            lr=self.args.learning_rate,
-            warmup=self.args.warmup_proportion,
-            t_total=num_train_optimization_steps,
-        )
-        return optimizer
-        # return torch.optim.Adam(self.parameters(),lr=self.args.learning_rate)
-
-    def get_progress_bar_dict(self):
-        tqdm_dict = super().get_progress_bar_dict()
-        tqdm_dict['t'] = datetime.now(timezone('Europe/Brussels')).strftime("%X")
-        return tqdm_dict
 
 
 class DeVLBertForVLTasks(BertPreTrainedModel):
@@ -1962,6 +1927,13 @@ class DeVLBertForVLTasks(BertPreTrainedModel):
             image_attention_mask=None,
             co_attention_mask=None,
             output_all_encoded_layers=False,
+            task_cfg=None,
+            task_id=None,
+            task_losses=None,
+            target=None,
+            batch_size=None,
+            num_options=None,
+            training=True
     ):
         sequence_output_t, sequence_output_v, pooled_output_t, pooled_output_v, _ = self.bert(
             input_txt,
@@ -1990,8 +1962,33 @@ class DeVLBertForVLTasks(BertPreTrainedModel):
         vision_logit = self.vision_logit(self.dropout(sequence_output_v)) + (
                 (1.0 - image_attention_mask) * -10000.0).unsqueeze(2).to(dtype=next(self.parameters()).dtype)
         linguisic_logit = self.linguisic_logit(self.dropout(sequence_output_t))
+        if not training:
+            return vil_prediction, vil_logit, vil_binary_prediction, vision_prediction, vision_logit, linguisic_prediction, linguisic_logit
+        else:
+            # Nathan
+            # for different task, we use different output to calculate the loss.
+            if task_cfg[task_id]['type'] == 'VL-classifier':
+                loss = task_losses[task_id](vil_prediction, target)
+                loss = loss.mean() * target.size(1)
+                batch_score = compute_score_with_logits(vil_prediction, target).sum() / float(batch_size)
 
-        return vil_prediction, vil_logit, vil_binary_prediction, vision_prediction, vision_logit, linguisic_prediction, linguisic_logit
+            elif task_cfg[task_id]['type'] == 'VL-logit':
+                # print(vil_logit.shape) #torch.Size([256, 1])
+                # print(target) # 64 zeros
+                vil_logit = vil_logit.view(batch_size, num_options)
+                loss = task_losses[task_id](vil_logit, target)
+                _, preds = torch.max(vil_logit, 1)
+                batch_score = float((preds == target).sum()) / float(batch_size)
+                # loss = task_losses[task_id](vil_logit, target)
+
+            elif task_cfg[task_id]['type'] == 'V-logit':
+                loss = task_losses[task_id](vision_logit, target)
+                loss = loss.mean() * target.size(1)
+                _, select_idx = torch.max(vision_logit, dim=1)
+                select_target = target.squeeze(2).gather(1, select_idx.view(-1,1))
+                batch_score = float(torch.sum(select_target>0.5)) / batch_size
+
+            return loss, batch_score
 
 
 class SimpleClassifier(nn.Module):

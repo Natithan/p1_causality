@@ -1,55 +1,55 @@
 # region pre-stuff
-from time import time as t, sleep
+
+import warnings
+
+warnings.simplefilter(action='ignore', category=FutureWarning)
+warnings.simplefilter(action='ignore', category=UserWarning)
+from mycallbacks import MyProgressBar, MyModelCheckpoint, MyDataConnector
+
+from time import time as t
+
 first_start = t()
 import glob
 
-import warnings
-from time import sleep
 import os
 # from memory_profiler import profile
 
 import yaml
 from pretorch_util import get_free_gpus
-from pytorch_lightning.plugins import DDPPlugin
 import jsonargparse
-# os.environ['CUDA_VISIBLE_DEVICES'] = ",".join([str(i) for i in get_free_gpus()])
-warnings.simplefilter(action='ignore', category=FutureWarning)
-warnings.simplefilter(action='ignore', category=UserWarning)
+
+if 'CUDA_VISIBLE_DEVICES' in os.environ:
+    print(os.environ['CUDA_VISIBLE_DEVICES'])
+else:
+    print("os.environ['CUDA_VISIBLE_DEVICES'] not set")
+    os.environ['CUDA_VISIBLE_DEVICES'] = ",".join([str(i) for i in get_free_gpus()])
+    print("Now set to", os.environ['CUDA_VISIBLE_DEVICES'])
 # from devlbert.datasets.concept_cap_dataset import get_core_ds
+from pytorch_lightning.plugins import DDPPlugin
 import argparse
 import json
 import logging
 import random
 from io import open
-import math
-import sys
 from time import strftime
-from datetime import datetime
 from pathlib import Path
 import pytorch_lightning as pl
 from pytorch_lightning import Trainer
-from pytorch_lightning.callbacks import LearningRateMonitor, ModelCheckpoint
-from pytorch_lightning.utilities.seed import seed_everything
+from pytorch_lightning.callbacks import LearningRateMonitor
 import torch.multiprocessing as mp
 
 START = t()
-from timeit import default_timer as timer
 import numpy as np
-from tqdm import tqdm, trange
+from tqdm import tqdm
 import torch
-from torch.utils.data import DataLoader, Dataset, RandomSampler
-from torch.utils.data.distributed import DistributedSampler
 # from tensorboardX import SummaryWriter
 from pytorch_lightning.loggers.tensorboard import SummaryWriter
 from pytorch_pretrained_bert.tokenization import BertTokenizer
-from pytorch_pretrained_bert.optimization import BertAdam, WarmupLinearSchedule
-from devlbert.datasets import ConceptCapLoaderTrain, ConceptCapLoaderVal
-from devlbert.devlbert import BertForMultiModalPreTraining, BertConfig
+from pytorch_pretrained_bert.optimization import BertAdam
+from devlbert.datasets import ConceptCapLoaderTrain
 import torch.distributed as dist
-import pdb
-from time import gmtime
-from constants import MODEL_CKPT_DIR, HOST, PROFILING_LOG_FILE_HANDLE
-from util import rank_to_device, MyLogger, myprint, get_rank, setup, cleanup, is_on_tpus, print_gpu_mem
+from constants import MODEL_CKPT_DIR, HOST
+from util import MyLogger, myprint, get_rank, setup, cleanup, is_on_tpus, print_gpu_mem
 from torch.nn.parallel import DistributedDataParallel as DDP
 
 logging.setLoggerClass(MyLogger)
@@ -67,7 +67,6 @@ MASTER_RANK = 0
 # endregion
 
 def main():
-
     parser = argparse.ArgumentParser()
     parser = add_program_argparse_args(parser)
 
@@ -94,7 +93,16 @@ def add_program_argparse_args(parser):
                         action=jsonargparse.ActionConfigFile)
 
     parser.add_argument(
-        "--empty_data", action="store_true", help="Whether to use fake empty data (to quickly check between-epoch functionality)."
+        "--vilbert", action="store_true",
+        help="Whether to use vilbert instead of devlbert."
+    )
+    parser.add_argument(
+        "--no_prior", action="store_true",
+        help="Whether to skip weighting elements of the confounder dictionary by their prior frequency."
+    )
+    parser.add_argument(
+        "--empty_data", action="store_true",
+        help="Whether to use fake empty data (to quickly check between-epoch functionality)."
     )
     parser.add_argument(
         "--train_file",
@@ -155,6 +163,18 @@ def add_program_argparse_args(parser):
              "Sequences longer than this will be truncated, and sequences shorter \n"
              "than this will be padded.",
     )
+    parser.add_argument(
+        "--checkpoint_every_n_train_steps",
+        default=100,
+        type=int,
+        help="Number of training steps (batches) between each checkpoint. To deal with within-epoch crashes.",
+    )
+    parser.add_argument(
+        "--exact_epochs",
+        default=12,
+        type=int,
+        help="Number of training epochs.",
+    )
     parser.add_argument("--predict_feature", action="store_true", help="visual target.")
     parser.add_argument(
         "--train_batch_size",
@@ -199,9 +219,15 @@ def add_program_argparse_args(parser):
         help="Whether to lower case the input text. True for uncased models, False for cased models.",
     )
     parser.add_argument(
-        "--myresume",
+        "--pt2_run",
         action="store_true",
         help="For the specific case of continuing pretraining with different mask rate to repro devlbert",
+    )
+
+    parser.add_argument(
+        "--mystepresume",
+        action="store_true",
+        help="For the specific case of continuing pretraining from a mid-epoch run based on the global step that is stored",
     )
     parser.add_argument(
         "--local_rank",
@@ -237,12 +263,12 @@ def add_program_argparse_args(parser):
         default=3,
         help="Number of workers in the dataloader.",
     )
-    parser.add_argument(
-        "--world_size",
-        type=int,
-        default=2,
-        help="Number of processes, should equal number of GPUs you intend to use.",
-    )
+    # parser.add_argument(
+    #     "--world_size",
+    #     type=int,
+    #     default=2,
+    #     help="Number of processes, should equal number of GPUs you intend to use.",
+    # )
     parser.add_argument(
         "--save_name",
         default='',
@@ -298,7 +324,7 @@ def add_program_argparse_args(parser):
 def main_single_process(rank, args, savePath):
     device = torch.device("cuda", rank)
     myprint("Entered main_single_process")
-    setup(rank=rank,world_size=args.world_size)
+    setup(rank=rank, world_size=args.world_size)
     s = t()
     if args.debug:
         logger.setLevel(logging.DEBUG)
@@ -343,7 +369,6 @@ def main_single_process(rank, args, savePath):
         args.bert_model, do_lower_case=args.do_lower_case
     )
 
-
     train_dataset = ConceptCapLoaderTrain(
         tokenizer,
         seq_len=args.max_seq_length,
@@ -371,7 +396,6 @@ def main_single_process(rank, args, savePath):
             )
             * args.num_train_epochs
     )
-
 
     viz = TBlogger(Path(args.output_dir, "logs"), Path(savePath).name)
 
@@ -411,7 +435,6 @@ def main_single_process(rank, args, savePath):
             # print("SLEEPING FOR DEBUGGING")
             # sleep(10000000)
 
-
             # # Load correct within-epoch step
             # step_file = get_step_file_path(savePath)
             # if step_file is not None:
@@ -423,7 +446,7 @@ def main_single_process(rank, args, savePath):
 
     # Nathan: updating according to https://nvidia.github.io/apex/amp.html#transition-guide-for-old-api-users
     # if args.fp16:
-        # model.half() # replacing with "model, optimizer = amp.initialize(mode, optimizer,opt_level='O2')" later on
+    # model.half() # replacing with "model, optimizer = amp.initialize(mode, optimizer,opt_level='O2')" later on
 
     # elif n_gpu > 1:
     no_decay = ["bias", "LayerNorm.bias", "LayerNorm.weight"]
@@ -689,8 +712,6 @@ def add_jsonargparse_args(cls, parent_parser: jsonargparse.ArgumentParser) -> js
     # )
     parser = parent_parser
 
-
-
     blacklist = ['kwargs']
     depr_arg_names = cls.get_deprecated_arg_names() + blacklist
 
@@ -740,12 +761,11 @@ def add_jsonargparse_args(cls, parent_parser: jsonargparse.ArgumentParser) -> js
 
     return parser
 
+
 # @profile(stream=PROFILING_LOG_FILE_HANDLE)
 # @profile
 def main_pl():
-
     s = t()
-    from devlbert.devlbert import BertForMultiModalPreTraining, BertConfig
     parser = jsonargparse.ArgumentParser()
     parser = add_program_argparse_args(parser)
 
@@ -756,6 +776,10 @@ def main_pl():
 
     parser.add_class_arguments(Trainer, 'trainer', as_group=True)
     args = parser.parse_args()
+    if not args.vilbert:
+        from devlbert.devlbert import BertForMultiModalPreTraining, BertConfig
+    else:
+        from devlbert.vilbert import BertForMultiModalPreTraining, BertConfig
     if args.trainer.min_epochs != args.trainer.max_epochs:
         raise NotImplementedError
     else:
@@ -773,10 +797,18 @@ def main_pl():
         logger.setLevel(logging.DEBUG)
     if args.baseline:
         raise NotImplementedError
+    if args.exact_epochs > 0:
+        args.trainer.min_epochs = args.trainer.max_epochs = args.exact_epochs
+        myprint(f"Training for exactly {args.exact_epochs} epochs")
 
+    if args.mystepresume:
+        list_of_ckpt = glob.glob(f'{args.output_dir}/epoch=*.ckpt')  # * means all if need specific format then *.csv
+        if len(list_of_ckpt) != 0:
+            latest_ckpt = max(list_of_ckpt, key=os.path.getctime)
+            args.trainer.resume_from_checkpoint = latest_ckpt
     logger.info(yaml.dump(args))
 
-    #region Getting BertConfig and tweaking it based on args
+    # region Getting BertConfig and tweaking it based on args
     config = BertConfig.from_json_file(args.config_file)
     if args.freeze > config.t_biattention_id[0]:
         config.fixed_t_layer = config.t_biattention_id[0]
@@ -788,8 +820,7 @@ def main_pl():
     else:
         config.v_target_size = 1601
         config.predict_feature = False
-    #endregion
-
+    # endregion
 
     if args.gradient_accumulation_steps < 1:
         raise ValueError(
@@ -806,65 +837,51 @@ def main_pl():
 
     if not os.path.exists(args.output_dir):
         os.makedirs(args.output_dir)
-    tokenizer = BertTokenizer.from_pretrained(
-        args.bert_model, do_lower_case=args.do_lower_case
-    )
-
-    class EmptyData(object):
-
-
-        def __init__(
-                self
-        ):
-            self.data = []
-            self.num_dataset = 0
-
-        def __iter__(self):
-
-            for batch in self.data:
-                yield batch
-
-        def __len__(self):
-            return len(self.data)
-
-    train_dataset = ConceptCapLoaderTrain(
-        tokenizer,
-        seq_len=args.max_seq_length,
-        batch_size=args.train_batch_size,
-        predict_feature=args.predict_feature,
-        num_workers=args.num_workers,
-        mini=args.mini,
-        shuffle=args.shuffle,
-        args=args
-    ) #if not args.empty_data else EmptyData()
-
-
 
     if args.from_pretrained != 'false':
         model = BertForMultiModalPreTraining.from_pretrained(args.from_pretrained, config, args=args)
     else:
         model = BertForMultiModalPreTraining(config)
 
-    if args.myresume:
-        list_of_files = glob.glob(f'{args.output_dir}/epoch=*.ckpt')  # * means all if need specific format then *.csv
-        latest_ckpt = max(list_of_files, key=os.path.getctime)
-        model = BertForMultiModalPreTraining.load_from_checkpoint(latest_ckpt, config=config, args=args)
+    if args.pt2_run:
+        PT2_REGION_MASK_PROB = 0.3
+        assert args.region_mask_prob == PT2_REGION_MASK_PROB
+        list_of_pt2_ckpts = glob.glob(f'{args.output_dir}/epoch=*{PT2_REGION_MASK_PROB}.ckpt')
+        if len(list_of_pt2_ckpts) > 0:
+            myprint("args.pt2 true, but pt2 intermediate checkpoints found. Restarting from those.")
+        else:
+            PT1_REGION_MASK_PROB = 0.15
+            list_of_pt1_ckpts = glob.glob(f'{args.output_dir}/epoch=*{PT1_REGION_MASK_PROB}.ckpt')
+            myprint(f"Loading pt1 checkpoint for pt2 from {f'{args.output_dir}/epoch=*{PT1_REGION_MASK_PROB}.ckpt'}")
+            latest_pt1_ckpt = max(list_of_pt1_ckpts, key=os.path.getctime)
+            model = BertForMultiModalPreTraining.load_from_checkpoint(latest_pt1_ckpt, config=config, args=args)
 
     lr_monitor = LearningRateMonitor(logging_interval='step')
-    checkpoint_callback = ModelCheckpoint(dirpath=args.output_dir,save_top_k=-1)
-    trainer = pl.Trainer.from_argparse_args(args.trainer, # auto_scale_batch_size='binsearch',
-                                            plugins=[DDPPlugin(find_unused_parameters=False)] if args.trainer.tpu_cores is None else [],  #from https://pytorch-lightning.readthedocs.io/en/latest/benchmarking/performance.html#when-using-ddp-set-find-unused-parameters-false
-                                            callbacks=[lr_monitor, checkpoint_callback],
+    checkpoint_filename = f'{{epoch}}-{{step}}-{args.region_mask_prob}'
+    checkpoint_callback = MyModelCheckpoint(dirpath=args.output_dir, save_top_k=-1,
+                                            every_n_train_steps=args.checkpoint_every_n_train_steps,
+                                            filename=checkpoint_filename)
+    progressbar_callback = MyProgressBar()
+    trainer = pl.Trainer.from_argparse_args(args.trainer,  # auto_scale_batch_size='binsearch',
+                                            plugins=[DDPPlugin(
+                                                find_unused_parameters=False)] if args.trainer.tpu_cores is None else [],
+                                            # from https://pytorch-lightning.readthedocs.io/en/latest/benchmarking/performance.html#when-using-ddp-set-find-unused-parameters-false
+                                            callbacks=[lr_monitor, checkpoint_callback, progressbar_callback],
                                             profiler='simple')
+
+    # Overriding DataConnector to start batch_idx at nonzero position after resuming mid-epoch checkpoint
+    trainer.data_connector = MyDataConnector(trainer,exp_args=args)
+    # init data flags
+    trainer.data_connector.on_trainer_init(
+        args.trainer.check_val_every_n_epoch, args.trainer.reload_dataloaders_every_epoch,
+        args.trainer.prepare_data_per_node
+    )
     print_gpu_mem()
     myprint("***** Running training *****")
-    myprint("  Num examples =", train_dataset.num_dataset,
-            "  Batch size =", args.train_batch_size,
-            "  Num steps =", len(train_dataset))
     myprint(f'Getting to trainer.fit took {t() - first_start} seconds')
     # trainer.tune(model,train_dataloader=train_dataset)
-    trainer.fit(model, train_dataloader=train_dataset)
-
+    # trainer.fit(model, train_dataloader=train_dataset)
+    trainer.fit(model)
 
 
 def training_step(args, batch, default_gpu, device, epochId, model, optimizer, rank, savePath, step, train_dataset,

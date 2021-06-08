@@ -14,17 +14,19 @@ if hostname == 'sceps':  # GCP:
     # "/mnt/disks/ssd_concap"
     # "/mnt/disks/concap"
     MODEL_CKPT_DIR = f"{CORE_ROOT_DIR}/p1_causality/{CKPT_DIR_NAME}"
-elif hostname in ['arwen', 'frodo', 'gimli', 'rose', 'frodo']:  # LIIR-servers
+elif hostname in ['arwen', 'frodo', 'gimli', 'rose', 'sauron']:  # LIIR-servers
     CORE_ROOT_DIR = "/cw/liir/NoCsBack/testliir/nathan"
     DATA_ROOT_DIR = "/cw/working-gimli/nathan/features_CoCa_lmdb"
     MODEL_CKPT_DIR = f"/cw/working-gimli/nathan/{CKPT_DIR_NAME}"
     HOST = 'LIIR'
+    FINETUNE_DATA_ROOT_DIR = "/cw/working-gimli/nathan/downstream_data"
 else:  # VSC
     print(hostname)
     CORE_ROOT_DIR = "/data/leuven/336/vsc33642/"
     DATA_ROOT_DIR = "/scratch/leuven/336/vsc33642/features_CoCa_lmdb"
     MODEL_CKPT_DIR = f"/scratch/leuven/336/vsc33642/{CKPT_DIR_NAME}"
     HOST = 'VSC'
+    FINETUNE_DATA_ROOT_DIR = "/scratch/leuven/336/vsc33642/downstream_datasets"
 
 PROJECT_ROOT_DIR = Path(CORE_ROOT_DIR, "p1_causality")
 DEVLBERT_ROOT_DIR = Path(PROJECT_ROOT_DIR, "DeVLBert")

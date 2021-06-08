@@ -6,8 +6,11 @@ import logging
 
 import os
 import yaml
+from constants import FINETUNE_DATA_ROOT_DIR
 from pretorch_util import get_free_gpus
 os.environ['CUDA_VISIBLE_DEVICES'] = ",".join([str(i) for i in get_free_gpus()])
+# os.environ['CUDA_VISIBLE_DEVICES'] = "1,3"
+# print(f"MANUALLY SETTING CUDA_VISIBLE_DEVICES TO {os.environ['CUDA_VISIBLE_DEVICES']}")
 import warnings
 warnings.simplefilter(action='ignore', category=FutureWarning)
 warnings.simplefilter(action='ignore', category=UserWarning)
@@ -16,7 +19,8 @@ import random
 from io import open
 import numpy as np
 from time import time, sleep
-from tensorboardX import SummaryWriter
+# from tensorboardX import SummaryWriter # Nathan
+from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
 from bisect import bisect
 from easydict import EasyDict as edict
@@ -183,7 +187,7 @@ def main():
     args = argparse.Namespace()
     args.__dict__ = {k: v.value for k, v in FGS.__flags.items()}
     #endregion
-    assert not args.world_size > len(get_free_gpus()), "World size bigger than number of available GPUs"
+    assert not args.world_size > len(os.environ['CUDA_VISIBLE_DEVICES'].split(",")), "World size bigger than number of available GPUs"
     mp.spawn(main_single_process,
          args=(args,),
          nprocs=args.world_size,
@@ -203,10 +207,27 @@ def main_single_process(rank, args):
         # Initializes the distributed backend which will take care of sychronizing nodes/GPUs
         # torch.distributed.init_process_group(backend="nccl")
 
-
+    if args.mini:
+        print("Mini run: setting # train epochs to 2")
+        args.num_train_epochs = 2
     myprint("Entered single process")
     with open('devlbert_tasks.yml', 'r') as f:
         task_cfg = edict(yaml.load(f))
+    #Nathan: different root dirs on different servers
+    for t in task_cfg:
+        for k, v in task_cfg[t].items():
+            if '__ROOT__' in str(v):
+                task_cfg[t][k] = v.replace('__ROOT__', FINETUNE_DATA_ROOT_DIR)
+    #Nathan
+    for tsk in ('TASK0','TASK3'):
+        task_cfg[tsk]['features_h5path1'] = task_cfg[tsk]['train_features_h5path1']
+
+    task_cfg['TASK3']['val_annotations_jsonpath'] = task_cfg['TASK3']['train_val_annotations_jsonpath']
+
+    if args.mini:
+        for p in ('train_annotations_jsonpath','val_annotations_jsonpath'):
+            split_path = os.path.split(task_cfg['TASK3'][p])
+            task_cfg['TASK3'][p] = os.path.join(*[split_path[0], 'mini_' + split_path[1]])
 
     # random.seed(args.seed)
     # np.random.seed(args.seed)
@@ -311,12 +332,14 @@ def main_single_process(rank, args):
     model.to(device)
     if args.local_rank != -1:
         try:
-            from apex.parallel import DistributedDataParallel as DDP
+            # from apex.parallel import DistributedDataParallel as DDP # Nathan
+            from torch.nn.parallel import DistributedDataParallel as DDP
         except ImportError:
             raise ImportError(
                 "Please install apex from https://www.github.com/nvidia/apex to use distributed and fp16 training."
             )
-        model = DDP(model, delay_allreduce=True)
+        # model = DDP(model, delay_allreduce=True)
+        model = DDP(model,find_unused_parameters=True) # Nathan based on https://github.com/NVIDIA/apex/issues/539
 
     elif n_gpu > 1:
         model = torch.nn.DataParallel(model)

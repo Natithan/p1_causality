@@ -6,7 +6,7 @@
       <sourceFolder url="file://$MODULE_DIR$/mturk/easyturk/easyturk" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/DeVLBert" isTestSource="false" />
     </content>
-    <orderEntry type="jdk" jdkName="Remote Python 3.6.10 (sftp://nathan_e_d_cornille_gmail_com@sceps.europe-west4-a.glass-cycle-312016:22/anaconda3/envs/devlbert/bin/python3.6)" jdkType="Python SDK" />
+    <orderEntry type="jdk" jdkName="DEVLBERT SAURON Remote Python 3.6.12 (sftp://nathan@sauron.cs.kuleuven.be:22/cw/liir/NoCsBack/testliir/nathan/miniconda3/envs/devlbert/bin/python3.6)" jdkType="Python SDK" />
     <orderEntry type="sourceFolder" forTests="false" />
     <orderEntry type="module" module-name="buatest" />
     <orderEntry type="module" module-name="DeVLBert" />

@@ -9,10 +9,12 @@ from io import open
 import numpy as np
 from pretorch_util import get_free_gpus
 from util import myprint
-
+from constants import FINETUNE_DATA_ROOT_DIR
 from devlbert.vilbert import VILBertForVLTasks
 
 os.environ['CUDA_VISIBLE_DEVICES'] = str(get_free_gpus()[0])
+# os.environ['CUDA_VISIBLE_DEVICES'] = "0"
+# print("*"*100,f"MANUALLY SETTING CUDA_VISIBLE_DEVICES TO {os.environ['CUDA_VISIBLE_DEVICES']}","*"*100)
 from tensorboardX import SummaryWriter
 from tqdm import tqdm
 from bisect import bisect
@@ -41,6 +43,7 @@ logger = logging.getLogger(__name__)
 
 
 def main():
+    #region Parser stuff
     parser = argparse.ArgumentParser()
 
     parser.add_argument(
@@ -125,10 +128,23 @@ def main():
     parser.add_argument(
         "--batch_size", default=1, type=int, help="batch size."
     )
+    parser.add_argument(
+        "--mini", action="store_true", help="whether to evaluate small part of the data, for quick-OK-run-check purposes"
+    )
     args = parser.parse_args()
+    #endregion
     with open('devlbert_tasks.yml', 'r') as f:
         task_cfg = edict(yaml.safe_load(f))
+    #Nathan: different root dirs on different servers
+    for t in task_cfg:
+        for k, v in task_cfg[t].items():
+            if '__ROOT__' in str(v):
+                task_cfg[t][k] = v.replace('__ROOT__', FINETUNE_DATA_ROOT_DIR)
 
+    # Nathan
+    for tsk in ('TASK0', 'TASK3'):
+        task_cfg[tsk]['features_h5path1'] = task_cfg[tsk]['eval_features_h5path1']
+    task_cfg['TASK3']['val_annotations_jsonpath'] = task_cfg['TASK3']['eval_val_annotations_jsonpath']
     random.seed(args.seed)
     np.random.seed(args.seed)
     torch.manual_seed(args.seed)
@@ -148,7 +164,7 @@ def main():
 
     # timeStamp = '-'.join(task_names) + '_' + args.config_file.split('/')[1].split('.')[0]
     if '/' in args.from_pretrained:
-        timeStamp = args.from_pretrained.split('/')[1]
+        timeStamp = args.from_pretrained.split('/')[-1]
     else:
         timeStamp = args.from_pretrained
 
@@ -239,6 +255,9 @@ def main():
         count = 0
 
         for i, batch in enumerate(task_dataloader_val[task_id]):
+            if args.mini:
+                if i > 20:
+                    break
             batch = tuple(t.cuda(device=device, non_blocking=True) for t in batch)
             features, spatials, image_mask, question, input_mask, segment_ids, target, caption_idx, image_idx = batch
 
@@ -259,7 +278,7 @@ def main():
 
                 else:
                     _, vil_logit, _, _, _, _, _ = model(question, features, spatials, segment_ids, input_mask,
-                                                        image_mask)
+                                                        image_mask,training=False)
                     score_matrix[caption_idx, image_idx * 500:(image_idx + 1) * 500] = vil_logit.view(-1).cpu().numpy()
                     # print(target.shape) # torch.Size([1, 500])
                     target_matrix[caption_idx, image_idx * 500:(image_idx + 1) * 500] = target.view(

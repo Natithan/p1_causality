@@ -14,9 +14,10 @@ from ._image_features_reader import ImageFeaturesH5Reader
 import pdb
 logger = logging.getLogger(__name__)  # pylint: disable=invalid-name
 os.environ["HDF5_USE_FILE_LOCKING"] = "FALSE"
-from absl import flags
 import sys
+from cfg_train_tasks import FGS
 
+# from absl import flags
 # FGS = flags.FLAGS
 # flags.DEFINE_bool("mini", False, "")
 # flags.DEFINE_float("mini_fraction",1/120,"Fraction of data to consider when doing mini run")
@@ -125,13 +126,16 @@ class VQAClassificationDataset(Dataset):
 
         cache_path = os.path.join(dataroot, "cache", task + '_' + split + '_' + str(max_seq_length)+'.pkl')
         # default_gpu = FGS.local_rank == 0
-        # if FGS.mini:
+        if FGS.mini:
         #     FULL_SIZE = 655111
         #     MINI_SIZE = int(FGS.mini_fraction * FULL_SIZE)
-        #     myprint("LOADING MINI DATA")
+            myprint("LOADING MINI DATA")
         #     old_cache_path = cache_path
         #     cache_path = os.path.join(dataroot, "cache", task + '_' + split + f'_mini_{FGS.mini_fraction}_' + str(max_seq_length) + '.pkl')
-        #     if not os.path.exists(cache_path):
+            cache_path = os.path.join(dataroot, "cache", task + '_' + split + f'_mini_' + str(max_seq_length) + '.pkl')
+            if not os.path.exists(cache_path):
+                print(f"Cache path {cache_path} not found.")
+                raise NotImplementedError
         #         self.entries = cPickle.load(open(old_cache_path, "rb"))[:MINI_SIZE]
         #         if default_gpu:
         #             myprint(f"Dumping mini data in cache at {cache_path}")

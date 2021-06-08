@@ -1,4 +1,6 @@
 import json
+
+from tqdm import tqdm
 from typing import Any, Dict, List
 import random
 import os
@@ -11,7 +13,7 @@ import _pickle as cPickle
 from pytorch_pretrained_bert.tokenization import BertTokenizer
 from util import myprint, get_rank
 
-# from cfg_train_tasks import FGS
+from cfg_train_tasks import FGS
 from ._image_features_reader import ImageFeaturesH5Reader, MyImageFeaturesH5Reader
 import jsonlines
 import sys
@@ -73,20 +75,33 @@ class RetreivalDataset(Dataset):
         self._max_seq_length = max_seq_length
 
         if self._split == 'train':
-            image_info = cPickle.load(open(os.path.join(dataroot, 'hard_negative.pkl'), 'rb'))
+            if FGS.mini:
+                '''
+                Made with:
+                mini_image_info = {'train_hard_pool':image_info['train_hard_pool'][:400],'train_image_list':image_info['train_image_list'][:400]}
+                old_pool = mini_image_info['train_hard_pool']
+                new_pool = np.where(old_pool < 400, old_pool, np.random.randint(0,400,(400,100))) #For debugging anyway so doesn't matter if negatives aren't actually hard
+                mini_image_info['train_hard_pool'] = new_pool
+                cPickle.dump(mini_image_info,open(os.path.join(dataroot,'mini_hard_negative.pkl'),'wb'))
+                '''
+                image_info = cPickle.load(open(os.path.join(dataroot, 'mini_hard_negative.pkl'), 'rb'))
+            else:
+                image_info = cPickle.load(open(os.path.join(dataroot, 'hard_negative.pkl'), 'rb'))
             for key, value in image_info.items():
                 setattr(self, key, value)
             self.train_imgId2pool = {imageId:i for i, imageId in enumerate(self.train_image_list)}
 
         cache_path = os.path.join(dataroot, "cache", task + '_' + split + '_' + str(max_seq_length)+'.pkl')
         default_gpu = get_rank() == 0
-        # if FGS.mini:
+        if FGS.mini:
         #     FULL_SIZE = len(self._entries)
         #     MINI_SIZE = int(FGS.mini_fraction * FULL_SIZE)
-        #     myprint("LOADING MINI DATA")
+            myprint("LOADING MINI DATA")
         #     old_cache_path = cache_path
         #     cache_path = os.path.join(dataroot, "cache", task + '_' + split + f'_mini_{FGS.mini_fraction}_' + str(max_seq_length) + '.pkl')
-        #     if not os.path.exists(cache_path):
+            cache_path = os.path.join(dataroot, "cache", task + '_' + split + f'_mini_' + str(max_seq_length) + '.pkl')
+            if not os.path.exists(cache_path):
+                raise NotImplementedError
         #         self._entries = cPickle.load(open(old_cache_path, "rb"))[:MINI_SIZE]
         #         if default_gpu:
         #             myprint(f"Dumping mini data in cache at {cache_path}")
@@ -454,7 +469,7 @@ class RetreivalDatasetVal(Dataset):
         self.spatials_all = np.zeros((1000, self._max_region_num, 5))
         self.image_mask_all = np.zeros((1000, self._max_region_num))
 
-        for i, image_id in enumerate(self._image_entries):
+        for i, image_id in tqdm(enumerate(self._image_entries)):
             features, num_boxes, boxes, _ = self._image_features_reader[image_id]
 
             mix_num_boxes = min(int(num_boxes), self._max_region_num)

@@ -6,6 +6,9 @@ import random
 from io import open
 import numpy as np
 
+import warnings
+
+warnings.simplefilter(action='ignore', category=FutureWarning)
 from tensorboardX import SummaryWriter
 from tqdm import tqdm
 from bisect import bisect
@@ -13,6 +16,7 @@ import yaml
 from easydict import EasyDict as edict
 import sys
 import pdb
+from constants import FINETUNE_DATA_ROOT_DIR
 
 import torch
 import torch.nn.functional as F
@@ -111,11 +115,23 @@ def main():
     parser.add_argument(
         "--split", default="", type=str, help="which split to use."
     )
+    parser.add_argument(
+        "--mini", action="store_true", help="whether to evaluate small part of the data, for quick-OK-run-check purposes"
+    )
     #endregion
     args = parser.parse_args()
     with open('devlbert_tasks.yml', 'r') as f:
         task_cfg = edict(yaml.safe_load(f))
 
+    #Nathan: different root dirs on different servers
+    for t in task_cfg:
+        for k, v in task_cfg[t].items():
+            if '__ROOT__' in str(v):
+                task_cfg[t][k] = v.replace('__ROOT__', FINETUNE_DATA_ROOT_DIR)
+
+    # Nathan
+    for tsk in ('TASK0', 'TASK3'):
+        task_cfg[tsk]['features_h5path1'] = task_cfg[tsk]['eval_features_h5path1']
     random.seed(args.seed)
     np.random.seed(args.seed)
     torch.manual_seed(args.seed)
@@ -134,7 +150,7 @@ def main():
         task_names.append(name)
 
     # timeStamp = '-'.join(task_names) + '_' + args.config_file.split('/')[1].split('.')[0]
-    timeStamp = args.from_pretrained.split('/')[1] + '-' + args.save_name
+    timeStamp = args.from_pretrained.split('/')[-1] + '-' + args.save_name
     savePath = os.path.join(args.output_dir, timeStamp)
 
     config = BertConfig.from_json_file(args.config_file)
@@ -205,7 +221,10 @@ def main():
     for task_id in task_ids:
         results = []
         others = []
-        for i, batch in enumerate(task_dataloader_val[task_id]):
+        for i, batch in tqdm(enumerate(task_dataloader_val[task_id])):
+            if args.mini:
+                if i > 3:
+                    break
             loss, score, batch_size, results, others = EvaluatingModel(args, task_cfg, device, \
                     task_id, batch, model, task_dataloader_val, task_losses, results, others)
 

@@ -372,7 +372,7 @@ def main_pl():
     # else:
     #     model = BertForMultiModalPreTraining(config)
     #
-    # if args.myresume:
+    # if args.pt2_run:
     #     list_of_files = glob.glob(f'{args.output_dir}/epoch=*.ckpt')  # * means all if need specific format then *.csv
     #     latest_ckpt = max(list_of_files, key=os.path.getctime)
     #     model = BertForMultiModalPreTraining.load_from_checkpoint(latest_ckpt, config=config, args=args)

@@ -1,20 +1,19 @@
+#region imports etc
 import warnings
+
+import jsonargparse
 from tqdm import tqdm
-
-
 warnings.simplefilter(action='ignore', category=FutureWarning)
 import os, glob
 from constants import DEVLBERT_ROOT_DIR, LMDB_PATHS, MTURK_DIR, ARWEN_LMDB_PATHS, PROJECT_ROOT_DIR
 # export PYTHONPATH=/cw/liir/NoCsBack/testliir/nathan/p1_causality/DeVLBert:$PYTHONPATH
 # os.environ['PYTHONPATH'] = f"{DEVLBERT_ROOT_DIR}:{os.environ['PYTHONPATH']}"
-from devlbert.datasets.retreival_dataset import MyRetreivalDataset
 
 import random
 from pathlib import Path
 import numpy as np
-from torch.utils.data import DataLoader
 from pretorch_util import get_free_gpus
-myrank = 2
+myrank = 0
 os.environ['CUDA_VISIBLE_DEVICES'] = ",".join([str(i) for i in get_free_gpus()][myrank])
 MASTER_PORT = f'{12355+ myrank}'
 import torch
@@ -33,29 +32,32 @@ from devlbert.datasets import ConceptCapLoaderTrain
 from devlbert.devlbert import BertForMultiModalPreTraining, BertConfig
 from scipy.stats import hypergeom
 from time import time as t, sleep, strftime
+#endregion
 
 OG_DEVLBERT_PATH = Path(DEVLBERT_ROOT_DIR, "save/devlbert/pytorch_model_11.bin")
 MY_DEVLBERT_PATH = Path(
     "/cw/working-gimli/nathan/devlbert_ckpts/pt_2_devlbert_base_real_try_4_again/pytorch_model_11.bin")
+TMP_DEVLBERT_PATH = Path(
+    "/cw/working-gimli/nathan/devlbert_checkpunten/epoch=6-step=70588-0.3.ckpt")
 CFG_PATH = Path(DEVLBERT_ROOT_DIR, "config/bert_base_6layer_6conect.json")
 GROUND_TRUTH_PATH = Path(MTURK_DIR, 'output_mturk', 'pair_annotations_0.8_no_cfdnce_weight.tsv')
 
 STATISTIC = 'mAP'
 # STATISTIC = 'avgAtt'
 
-PRETRAINED_PATH = MY_DEVLBERT_PATH
-# PRETRAINED_PATH = OG_DEVLBERT_PATH
+PRETRAINED_PATH = TMP_DEVLBERT_PATH # MY_DEVLBERT_PATH OG_DEVLBERT_PATH TMP_DEVLBERT_PATH
 
 DATASET = 'coca'
 # DATASET = 'flickr30k'
 
-OUT_DIR = Path(PROJECT_ROOT_DIR, f'{STATISTIC}_output')
+# OUT_DIR = Path(PROJECT_ROOT_DIR, f'{STATISTIC}_output')
+OUT_DIR = Path(PROJECT_ROOT_DIR, f'{STATISTIC}_output_debug')
 AA = ('avgAtt' == STATISTIC)
 
 BATCH_SIZE = 32
 
-# MAX_T = 60
-MAX_T = 60 * 60 * 12
+MAX_T = 60
+# MAX_T = 60 * 60 * 12
 
 
 class RandomAPExact:
@@ -75,9 +77,30 @@ class RandomAPExact:
             return ap
 
 
+def add_program_argparse_args(parser):
+    parser.add_argument(
+        "--checkpoint",
+        default=PRETRAINED_PATH,
+        type=str,
+        # required=True,
+        help="The checkpoint for which to get the mAP score.",
+    )
+    parser.add_argument(
+        "--out_dir",
+        default=OUT_DIR,
+        type=str,
+        # required=True,
+        help="The directory where to save output score files",
+    )
+    return parser
+
 def main_single_process(rank, world_size, run_id):
+
+    parser = jsonargparse.ArgumentParser()
+    parser = add_program_argparse_args(parser)
+    args = parser.parse_args()
     setup(rank=rank, world_size=world_size)
-    model = BertForMultiModalPreTraining.from_pretrained(PRETRAINED_PATH, config=BertConfig.from_json_file(CFG_PATH))
+    model = BertForMultiModalPreTraining.from_pretrained(args.checkpoint, config=BertConfig.from_json_file(CFG_PATH))
     device = torch.device(f"cuda:{rank}")
     model.to(device)
     tokenizer = BertTokenizer.from_pretrained(
@@ -94,6 +117,8 @@ def main_single_process(rank, world_size, run_id):
             num_workers=0
         )
     elif DATASET == 'flickr30k':
+        from devlbert.datasets.retreival_dataset import MyRetreivalDataset
+        from torch.utils.data import DataLoader
         train_dataset = \
             DataLoader(MyRetreivalDataset(
                 task='RetrievalFlickr30k',
@@ -288,7 +313,7 @@ def main_single_process(rank, world_size, run_id):
         for id in attentionAndCount_for_classid:
             counts[id] = attentionAndCount_for_classid[id]['count']
         avgAtt_df.insert(0, "Counts", counts, True)
-        avgAtt_output_file = Path(OUT_DIR, f'avgAtt_{run_id}_{batch_num}_rank{rank}.csv')
+        avgAtt_output_file = Path(args.out_dir, f'avgAtt_{run_id}_{batch_num}_rank{rank}.csv')
         avgAtt_df.to_csv(avgAtt_output_file)
 
         sorted_df = avgAtt_df.sort_values(by='Counts', ascending=False)
@@ -321,9 +346,13 @@ def main_single_process(rank, world_size, run_id):
                 df_to_store['turker_info'] = [i[2] for i in df_to_store.index]
                 df_to_store.index = [i[0] for i in df_to_store.index]
             df_to_store.sort_values(by='excess_mAP', inplace=True)
-            output_file = Path(OUT_DIR, f'{name}_mAP_comparison_{run_id}_{batch_num}_rank{rank}_{"my_devlbert" if PRETRAINED_PATH == MY_DEVLBERT_PATH else "og_devlbert"}.csv')
+            if not os.path.exists(args.out_dir):
+                os.makedirs(args.out_dir)
+            # output_file = Path(args.out_dir, f'{name}_mAP_comparison_{run_id}_{batch_num}_rank{rank}_{"my_devlbert" if PRETRAINED_PATH == MY_DEVLBERT_PATH else "og_devlbert"}.csv')
+            output_file = Path(args.out_dir, f'{name}_mAP_comparison_{run_id}_{batch_num}_rank{rank}.csv')
             df_to_store.to_csv(output_file, index=False if (name == 'avg') else True)
-    cleanup()
+    if world_size > 1:
+        cleanup()
 
 
 class GT:
@@ -402,26 +431,28 @@ def main():
     n_procs = len(get_free_gpus())
     n_procs = 1
     run_id = int(t())
-    mp.spawn(main_single_process,
-             args=(n_procs, run_id),
-             nprocs=n_procs,
-             join=True)
+    main_single_process(0,1,run_id)
+    # mp.spawn(main_single_process,
+    #          args=(n_procs, run_id),
+    #          nprocs=n_procs,
+    #          join=True)
     if not AA:
         pass
         # prestring = 'avgAtt_' if AA else 'mAP_comparison_'
-        # partial_files = glob.glob(f'{OUT_DIR.as_posix()}/{prestring}{run_id}_*')
+        # partial_files = glob.glob(f'{args.out_dir.as_posix()}/{prestring}{run_id}_*')
         # assert len(partial_files) == n_procs
         # dfs = [pd.read_csv(f) for f in partial_files]
         # avg = pd.concat(dfs)[['mAP_devlbert', 'mAP_baseline', 'mAP_baseline_emp']].mean()
-        # avg.to_csv(Path(OUT_DIR, f'mAP_comparison_full_{run_id}.csv'), header=False)
+        # avg.to_csv(Path(args.out_dir, f'mAP_comparison_full_{run_id}.csv'), header=False)
 
 
 def setup(rank, world_size):
-    os.environ['MASTER_ADDR'] = 'localhost'
-    os.environ['MASTER_PORT'] = MASTER_PORT
+    if world_size > 1:
+        os.environ['MASTER_ADDR'] = 'localhost'
+        os.environ['MASTER_PORT'] = MASTER_PORT
 
-    # initialize the process group
-    dist.init_process_group("nccl", rank=rank, world_size=world_size)
+        # initialize the process group
+        dist.init_process_group("nccl", rank=rank, world_size=world_size)
 
 
 def cleanup():

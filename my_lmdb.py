@@ -275,6 +275,8 @@ class MyLMDBSerializer:
 def gpu_count_from_gpu_arg(gpus): # See https://pytorch-lightning.readthedocs.io/en/stable/advanced/multi_gpu.html#select-gpu-devices
     if gpus == None or gpus == 0:
         return 1
+    if gpus == -1:
+        return int(os.environ['WORLD_SIZE'])
     elif type(gpus) == int:
         return gpus
     elif type(gpus) == list:
@@ -289,11 +291,19 @@ class MyLMDBData(LMDBData):
         self._lmdb_paths = lmdb_paths
         self._shuffle = shuffle
         self.args = args
-        self.nb_processes = args.trainer.tpu_cores if is_on_tpus() else gpu_count_from_gpu_arg(args.trainer.gpus)
+        if args is not None:
+            self.nb_processes = args.trainer.tpu_cores if is_on_tpus() else gpu_count_from_gpu_arg(args.trainer.gpus)
+            self.checkpoint_every_n_train_steps = self.args.checkpoint_every_n_train_steps
+        else:
+            self.nb_processes = 1
+            self.checkpoint_every_n_train_steps = 0
         self._open_lmdbs()
         self._sizes = [txn.stat()['entries'] for txn in self._txns]
+        self.only_data_sizes = [len(pickle5.loads(txn.get(b'__keys__'))) for txn in self._txns]
+        self.nb_records = sum(self.only_data_sizes)
         self.rng = get_rng(self)
         logger.info("Found {} entries in {}".format([s for s in self._sizes], [p for p in self._lmdb_paths]))
+        self.data_index = {'txn_idx':0,'txn_yield_count':0}
 
         # self._set_keys()
         # Clean them up after finding the list of keys, since we don't want to fork them
@@ -347,22 +357,42 @@ class MyLMDBData(LMDBData):
         y_times = []
         with self._guard:
             if not self._shuffle:
-                for j, txn in enumerate(self._txns):
-                    c = txn.cursor()
-                    for i, (k, v) in enumerate(c):
-                        if (i + self.rank - 1) % self.nb_processes == 0:
-                            if k != b'__keys__':
-                                yield [k, v]
+
+                if self.checkpoint_every_n_train_steps > 0:
+                    start_txn_idx = self.data_index['txn_idx']
+                    if not (self.data_index['txn_idx'],self.data_index['txn_yield_count']) == (0, 0):
+                        myprint(f"Starting in data from txn #{self.data_index['txn_idx']}, record #{self.data_index['txn_yield_count']}")
+                    for j, txn in enumerate(self._txns[start_txn_idx:]):
+                        self.data_index['txn_idx'] = start_txn_idx + j
+                        c = txn.cursor()
+                        done_txn_yield_count = self.data_index['txn_yield_count']
+                        if not c.set_range(enc(done_txn_yield_count)): # This checks also sets the offset
+                            raise ValueError(f"Wanted to start at record {done_txn_yield_count} but not found in transaction")
+                        for i, (k, v) in enumerate(c):
+                            if (i + self.rank - 1) % self.nb_processes == 0:
+                                if k != b'__keys__': # These are last record in each lmdb, so no worries
+                                    self.data_index['txn_yield_count'] = done_txn_yield_count + i
+                                    yield [k, v]
+                        self.data_index['txn_yield_count'] = 0
+                    self.data_index['txn_idx'] = 0
+                else:
+                    for txn in self._txns:
+                        c = txn.cursor()
+                        for i, (k, v) in enumerate(c):
+                            if (i + self.rank - 1) % self.nb_processes == 0:
+                                if k != b'__keys__': # These are last record in each lmdb, so no worries
+                                    yield [k, v]
             else:
-                for j, (txn, keys) in enumerate(zip(self._txns, self.keys_list)):
-                    for i, k in enumerate(keys):
-                        v = txn.get(k)
-                        y_times.append(t() - ys)
-                        if i % self.args.train_batch_size == 0:
-                            my_maybe_print(f"MyLMDBData between-yield time for {len(y_times)} elements was {sum(y_times)}")
-                            y_times = []
-                        yield [k, v]
-                        ys = t()
+                raise NotImplementedError
+                # for j, (txn, keys) in enumerate(zip(self._txns, self.keys_list)):
+                #     for i, k in enumerate(keys):
+                #         v = txn.get(k)
+                #         y_times.append(t() - ys)
+                #         if i % self.args.train_batch_size == 0:
+                #             my_maybe_print(f"MyLMDBData between-yield time for {len(y_times)} elements was {sum(y_times)}")
+                #             y_times = []
+                #         yield [k, v]
+                #         ys = t()
 
     def __len__(self):
         if self._shuffle:

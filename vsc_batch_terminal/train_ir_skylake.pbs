@@ -1,0 +1,26 @@
+#!/bin/bash
+
+#PBS -A lcalculus
+#PBS -l nodes=1:ppn=36:gpus=4:skylake
+#PBS -l partition=gpu
+#PBS -l walltime=168:00:00
+#PBS -l pmem=5gb
+#PBS -m abe
+#PBS -j oe
+#PBS -M nathan.cornille@kuleuven.be
+#PBS -N skylake_run
+
+source $HOME/.bashrc
+conda activate devlbert
+
+## Finetuning on IR
+python train_tasks.py --bert_model bert-base-uncased \
+--from_pretrained $VSC_SCRATCH/devlbert_checkpunten/epoch=3-step=18077-0.3.ckpt \
+--config_file config/bert_base_6layer_6conect.json --learning_rate 4e-5 \
+--tasks 3 --save_name devlbert_i --use_ema --ema_decay_ratio 0.9999 --num_workers 0 --batch_size 64 --output_dir $VSC_SCRATCH/ckpts_downstream
+
+# Evaluating on IR
+python eval_retrieval.py --bert_model bert-base-uncased \
+--from_pretrained /cw/working-gimli/nathan/ckpts_downstream/RetrievalFlickr30k_bert_base_6layer_6conect-24_ep_devlbert_i/pytorch_model_11_ema.bin \
+--config_file config/bert_base_6layer_6conect.json --tasks 3 --split test --batch_size 1
+

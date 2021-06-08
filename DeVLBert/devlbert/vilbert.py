@@ -14,6 +14,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 """PyTorch BERT model."""
+import re
+# from memory_profiler import profile
 
 import copy
 import json
@@ -31,9 +33,13 @@ from torch import nn
 from torch.nn import CrossEntropyLoss
 import torch.nn.functional as F
 from torch.nn.utils.weight_norm import weight_norm
+from util import is_master_rank, my_maybe_print
+
+from .myplmodule import PLBertForMultimodalPretraining
+from .task_utils import compute_score_with_logits
 
 from .utils import cached_path
-import pdb
+from time import time as t
 
 logger = logging.getLogger(__name__)
 
@@ -711,15 +717,15 @@ class BertBiOutput(nn.Module):
         self.LayerNorm1 = BertLayerNorm(config.v_hidden_size, eps=1e-12)
         self.dropout1 = nn.Dropout(config.v_hidden_dropout_prob)
 
-        self.q_dense1 = nn.Linear(config.bi_hidden_size, config.v_hidden_size)
-        self.q_dropout1 = nn.Dropout(config.v_hidden_dropout_prob)
+        # self.q_dense1 = nn.Linear(config.bi_hidden_size, config.v_hidden_size)
+        # self.q_dropout1 = nn.Dropout(config.v_hidden_dropout_prob)
 
         self.dense2 = nn.Linear(config.bi_hidden_size, config.hidden_size)
         self.LayerNorm2 = BertLayerNorm(config.hidden_size, eps=1e-12)
         self.dropout2 = nn.Dropout(config.hidden_dropout_prob)
 
-        self.q_dense2 = nn.Linear(config.bi_hidden_size, config.hidden_size)
-        self.q_dropout2 = nn.Dropout(config.hidden_dropout_prob)
+        # self.q_dense2 = nn.Linear(config.bi_hidden_size, config.hidden_size)
+        # self.q_dropout2 = nn.Dropout(config.hidden_dropout_prob)
 
     def forward(self, hidden_states1, input_tensor1, hidden_states2, input_tensor2):
         context_state1 = self.dense1(hidden_states1)
@@ -1173,7 +1179,8 @@ class BertPreTrainedModel(nn.Module):
         tempdir = None
         if os.path.isdir(resolved_archive_file) or from_tf:
             serialization_dir = resolved_archive_file
-        elif resolved_archive_file[-3:] == 'bin':
+        # elif resolved_archive_file[-3:] == 'bin':
+        elif any(resolved_archive_file.endswith(ending) for ending in ('bin','ckpt')): # Nathan
             serialization_dir = '/'.join(resolved_archive_file.split('/')[:-1])
             WEIGHTS_NAME = resolved_archive_file.split('/')[-1]
         else:
@@ -1190,8 +1197,8 @@ class BertPreTrainedModel(nn.Module):
         # Load config
         # config_file = os.path.join(serialization_dir, CONFIG_NAME)
         # config = BertConfig.from_json_file(config_file)
-        if default_gpu:
-            logger.info("Model config {}".format(config))
+        # if default_gpu:
+        #     logger.info("Model config {}".format(config))
         # Instantiate model.
         model = cls(config, *inputs, **kwargs)
         if state_dict is None and not from_tf:
@@ -1202,6 +1209,8 @@ class BertPreTrainedModel(nn.Module):
             )
             if 'state_dict' in dir(state_dict):
                 state_dict = state_dict.state_dict()
+            elif 'state_dict' in state_dict: # Nathan
+                state_dict = state_dict['state_dict']
 
         if tempdir:
             # Clean up temp dir
@@ -1256,17 +1265,46 @@ class BertPreTrainedModel(nn.Module):
             start_prefix = "bert."
         load(model, prefix=start_prefix)
         if len(missing_keys) > 0 and default_gpu:
-            logger.info(
-                "Weights of {} not initialized from pretrained model: {}".format(
-                    model.__class__.__name__, missing_keys
-                )
-            )
+            # logger.info(
+            #     "Weights of {} not initialized from pretrained model: {}".format(
+            #         model.__class__.__name__, missing_keys
+            #     )
+            # )
+            # Nathan
+            allowed_missing = [
+                                # For loading og pretrained for concap-extra-pretraining"
+                               "bert.v_embeddings.*",
+                               "bert.encoder.v_layer.*",
+                               "bert.encoder.c_layer.*",
+                               "bert.t_pooler.*",
+                               "bert.v_pooler.*",
+                               "cls.bi_seq_relationship.*",
+                               "cls.imagePredictions.*",
+                               # For loading concap-pretrained for ir-task-training
+                               "vil_prediction.*",
+                               "vil_logit.*",
+                               "vision_logit.*",
+                               "linguisic_logit.*" #sic
+                               ]
+            assert all([any([bool(re.match(am, mk)) for am in allowed_missing]) for mk in
+                        missing_keys]), "Some unallowed keys missing from pretrained model"
+
         if len(unexpected_keys) > 0 and default_gpu:
-            logger.info(
-                "Weights from pretrained model not used in {}: {}".format(
-                    model.__class__.__name__, unexpected_keys
-                )
-            )
+            # logger.info(
+            #     "Weights from pretrained model not used in {}: {}".format(
+            #         model.__class__.__name__, unexpected_keys
+            #     )
+            # )
+            allowed_unexpected = [
+                                # For loading og pretrained for concap-extra-pretraining"
+                                'bert.pooler.dense.weight',
+                                'bert.pooler.dense.bias',
+                                'cls.seq_relationship.weight',
+                                'cls.seq_relationship.bias'
+
+            ]
+            assert all([any([bool(re.match(au, uk)) for au in allowed_unexpected]) for uk in
+                        unexpected_keys]), "Some unallowed keys missing from pretrained model"
         if len(error_msgs) > 0 and default_gpu:
             raise RuntimeError(
                 "Error(s) in loading state_dict for {}:\n\t{}".format(
@@ -1433,11 +1471,11 @@ class BertImageEmbeddings(nn.Module):
         return embeddings
 
 
-class BertForMultiModalPreTraining(BertPreTrainedModel):
+class BertForMultiModalPreTraining(BertPreTrainedModel, PLBertForMultimodalPretraining):
     """BERT model with multi modal pre-training heads.
     """
 
-    def __init__(self, config):
+    def __init__(self, config, args=None):
         super(BertForMultiModalPreTraining, self).__init__(config)
 
         self.bert = BertModel(config)
@@ -1455,6 +1493,7 @@ class BertForMultiModalPreTraining(BertPreTrainedModel):
             self.vis_criterion = nn.MSELoss(reduction="none")
         else:
             self.vis_criterion = nn.KLDivLoss(reduction="none")
+        self.args = args
 
     def forward(
             self,
@@ -1517,6 +1556,61 @@ class BertForMultiModalPreTraining(BertPreTrainedModel):
         else:
             return prediction_scores_t, prediction_scores_v, seq_relationship_score, all_attention_mask
 
+ # @profile(stream=memprof_log_handle_for_name('training_step'))
+    # @profile
+    def training_step(self, batch, batch_idx):
+        input_ids, input_mask, segment_ids, lm_label_ids, is_next, image_feat, image_loc, image_target, image_label, image_mask, \
+        image_ids, causal_label_t, causal_label_v = (
+            batch
+        )
+        # p = '/home/nathan_e_d_cornille_gmail_com/p1_causality/DeVLBert/tmp_check_ids.txt'
+        # with open(p, 'a') as f:
+        #     for image_id in image_ids:
+        #         f.write(f'{image_id.cpu().numpy()}\n')
+
+        # with open(p, 'r') as f:
+        #     idss = f.readlines()
+        #
+        # len(set(idss))
+        s = t()
+        my_maybe_print(f'Doing Model input --> model output losses')
+        masked_loss_t, masked_loss_v, next_sentence_loss = self(
+            input_ids,
+            image_feat,
+            image_loc,
+            segment_ids,
+            input_mask,
+            image_mask,
+            lm_label_ids,
+            image_label,
+            image_target,
+            is_next
+        )
+        my_maybe_print(f'Model input --> model output losses took {t() - s}')
+
+        masked_loss_v = masked_loss_v * self.args.img_weight
+        loss = masked_loss_t + masked_loss_v + next_sentence_loss
+
+        # region tboard logging
+        if is_master_rank() and self.trainer.logger_connector.should_update_logs:  # and not self.args.mini: # skip when debugging as this involves moving to cpu which takes quite a long time the first time round
+            s = t()
+            my_maybe_print(f"tboard logging ...")
+            self.log("loss", loss)
+            self.log("masked_loss_t", masked_loss_t)
+            self.log("masked_loss_v", masked_loss_v)
+            self.log("next_sentence_loss", next_sentence_loss)
+            my_maybe_print(f"tboard logging took {t() - s}")
+        # endregion
+        # else:
+        #     myprint("*"*50, "STOPPING NON-MASTER PROCESSES FOR EASY DEBUGGING", "*"*50)
+        #     stop = True
+        #     while stop:
+        #         sleep(10)
+
+        return {'loss': loss}
+
+
+
 
 class VILBertForVLTasks(BertPreTrainedModel):
     def __init__(self, config, num_labels, dropout_prob=0.1, default_gpu=True):
@@ -1545,6 +1639,13 @@ class VILBertForVLTasks(BertPreTrainedModel):
             image_attention_mask=None,
             co_attention_mask=None,
             output_all_encoded_layers=False,
+            task_cfg=None,
+            task_id=None,
+            task_losses=None,
+            target=None,
+            batch_size=None,
+            num_options=None,
+            training=True
     ):
         sequence_output_t, sequence_output_v, pooled_output_t, pooled_output_v, _ = self.bert(
             input_txt,
@@ -1582,7 +1683,34 @@ class VILBertForVLTasks(BertPreTrainedModel):
                     (1.0 - image_attention_mask) * -10000.0).unsqueeze(2).to(dtype=next(self.parameters()).dtype)
         linguisic_logit = self.linguisic_logit(self.dropout(sequence_output_t))
 
-        return vil_prediction, vil_logit, vil_binary_prediction, vision_prediction, vision_logit, linguisic_prediction, linguisic_logit
+        if not training:
+            return vil_prediction, vil_logit, vil_binary_prediction, vision_prediction, vision_logit, linguisic_prediction, linguisic_logit
+        else:
+
+            # Nathan
+            # for different task, we use different output to calculate the loss.
+            if task_cfg[task_id]['type'] == 'VL-classifier':
+                loss = task_losses[task_id](vil_prediction, target)
+                loss = loss.mean() * target.size(1)
+                batch_score = compute_score_with_logits(vil_prediction, target).sum() / float(batch_size)
+
+            elif task_cfg[task_id]['type'] == 'VL-logit':
+                # print(vil_logit.shape) #torch.Size([256, 1])
+                # print(target) # 64 zeros
+                vil_logit = vil_logit.view(batch_size, num_options)
+                loss = task_losses[task_id](vil_logit, target)
+                _, preds = torch.max(vil_logit, 1)
+                batch_score = float((preds == target).sum()) / float(batch_size)
+                # loss = task_losses[task_id](vil_logit, target)
+
+            elif task_cfg[task_id]['type'] == 'V-logit':
+                loss = task_losses[task_id](vision_logit, target)
+                loss = loss.mean() * target.size(1)
+                _, select_idx = torch.max(vision_logit, dim=1)
+                select_target = target.squeeze(2).gather(1, select_idx.view(-1, 1))
+                batch_score = float(torch.sum(select_target > 0.5)) / batch_size
+
+            return loss, batch_score
 
 
 class SimpleClassifier(nn.Module):
@@ -1599,3 +1727,6 @@ class SimpleClassifier(nn.Module):
     def forward(self, x):
         logits = self.main(x)
         return logits
+
+
+
