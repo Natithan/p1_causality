@@ -299,16 +299,23 @@ def main_single_process(rank, args):
             task_dataloader_train, task_dataloader_val = LoadDatasets(args, task_cfg, args.tasks.split('-'))
     # print(task_ids) #['TASK0'] ['TASK3']
     logdir = os.path.join(args.output_dir,'logs',timeStamp)
-    if not os.path.exists(logdir):
-        os.makedirs(logdir)
+
+    try:
+        if not os.path.exists(logdir):
+            os.makedirs(logdir)
+    except Exception:
+        pass
 
     tbLogger = utils.tbLogger(logdir, savePath, task_names, task_ids, task_num_iters, args.gradient_accumulation_steps,save_logger=True)
 
     # if n_gpu > 0:
         # torch.cuda.manual_seed_all(args.seed)
 
-    if not os.path.exists(args.output_dir):
-        os.makedirs(args.output_dir)
+    try:
+        if not os.path.exists(args.output_dir):
+            os.makedirs(args.output_dir)
+    except Exception:
+        pass
 
     num_train_optimization_steps = max(task_num_iters.values()) * args.num_train_epochs // args.gradient_accumulation_steps
     num_labels = max([dataset.num_labels for dataset in task_datasets_train.values()])
@@ -329,7 +336,7 @@ def main_single_process(rank, args):
             )
 
     task_losses = LoadLosses(args, task_cfg, args.tasks.split('-'))
-    model.to(device)
+    model.to(device) # Nathan
     if args.local_rank != -1:
         try:
             # from apex.parallel import DistributedDataParallel as DDP # Nathan
@@ -339,7 +346,8 @@ def main_single_process(rank, args):
                 "Please install apex from https://www.github.com/nvidia/apex to use distributed and fp16 training."
             )
         # model = DDP(model, delay_allreduce=True)
-        model = DDP(model,find_unused_parameters=True) # Nathan based on https://github.com/NVIDIA/apex/issues/539
+        myprint(device,args.local_rank)
+        model = DDP(model,find_unused_parameters=True,device_ids=[rank],output_device=rank) # Nathan based on https://github.com/NVIDIA/apex/issues/539
 
     elif n_gpu > 1:
         model = torch.nn.DataParallel(model)
@@ -517,9 +525,11 @@ def main_single_process(rank, args):
             model_to_save = (
                 model.module if hasattr(model, "module") else model
             )  # Only save the model it-self
-
-            if not os.path.exists(savePath):
-                os.makedirs(savePath)
+            try:
+                if not os.path.exists(savePath):
+                    os.makedirs(savePath)
+            except Exception:
+                pass
             torch.save(model_to_save.state_dict(), output_model_file)
             # If EMA is used, save averaged model
             if args.use_ema:

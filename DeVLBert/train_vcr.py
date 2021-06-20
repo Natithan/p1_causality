@@ -6,7 +6,8 @@ import random
 from io import open
 import numpy as np
 
-from tensorboardX import SummaryWriter
+# from tensorboardX import SummaryWriter
+from pytorch_lightning.loggers.tensorboard import SummaryWriter
 from tqdm import tqdm
 from bisect import bisect
 import yaml

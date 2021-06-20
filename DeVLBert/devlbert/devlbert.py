@@ -16,7 +16,8 @@
 """PyTorch BERT model."""
 import glob
 import re
-from constants import PROFILING_LOG_FILE_HANDLE, memprof_log_handle_for_name
+import pickle
+from constants import PROFILING_LOG_FILE_HANDLE, memprof_log_handle_for_name, ID2CLASS_PATH
 # from memory_profiler import profile
 from my_lmdb import get_core_ds
 from pytorch_pretrained_bert import BertTokenizer
@@ -25,7 +26,6 @@ from pytorch_pretrained_bert.optimization import BertAdam
 import pytorch_lightning as pl
 # from deepspeed.ops.adam import FusedAdam
 import copy
-
 import json
 import logging
 import math
@@ -1346,7 +1346,8 @@ class BertPreTrainedModel(nn.Module):
                                "vil_prediction.*",
                                "vil_logit.*",
                                "vision_logit.*",
-                               "linguisic_logit.*" #sic
+                               "linguisic_logit.*",#sic
+                                'id2class_vector'
                                ]
             assert all([any([bool(re.match(am, mk)) for am in allowed_missing]) for mk in
                         missing_keys]), "Some unallowed keys missing from pretrained model"
@@ -1555,31 +1556,48 @@ class Causal_v(nn.Module):
         self.args = args
         # Following  https://pytorch-lightning.readthedocs.io/en/latest/advanced/multi_gpu.html#init-tensors-using-type-as-and-register-buffer
         self.register_buffer("dic_z", torch.tensor(np.load("./dic/dic_v.npy"), dtype=torch.float))
+        if self.args is not None and self.args.dependent_prior:
+            self.register_buffer("cond_prior", torch.tensor(pickle.load(open("../cond_probs_v_and_t_and_combo",'rb'))['image'],dtype=torch.float))
         self.register_buffer("prior", torch.tensor(np.load("./dic/prior_v.npy"), dtype=torch.float))
-
         nn.init.normal_(self.Wy.weight, std=0.02)
         nn.init.normal_(self.Wz.weight, std=0.02)
         nn.init.constant_(self.Wy.bias, 0)
         nn.init.constant_(self.Wz.bias, 0)
 
-    def forward(self, y):
+    def forward(self, y,og_classes=None):
         temp = []
         # Class = torch.argmax(image_target, 2, keepdim=True)
         # for boxes, cls in zip(y, Class):
-        for boxes in y:
+        for i,boxes in enumerate(y):
             attention = torch.mm(self.Wy(boxes), self.Wz(self.dic_z).t()) / (self.embedding_size ** 0.5)
             attention = F.softmax(attention, 1)  # torch.Size([box, 1601])
             z_hat = attention.unsqueeze(2) * self.dic_z.unsqueeze(0)
             # torch.Size([box, 1601, 2048])
             # Nathan
-            if self.args.no_prior:
-                z = torch.mean(z_hat,1).shape
-            else:
-                z = torch.matmul(self.prior.unsqueeze(0), z_hat).squeeze(
-                    1)  # torch.Size([box, 1, 2048])->torch.Size([box, 2048])
+            z = apply_prior(self,i, og_classes, z_hat)
             temp.append(z)
         temp = torch.stack(temp, 0)
         return temp
+
+def apply_prior(module, i, og_classes, z_hat):
+    if module.args is not None and module.args.no_prior:
+        z = torch.mean(z_hat, 1)
+    elif module.args is not None and module.args.dependent_prior:
+        classes = og_classes[i]
+        # -1 indexes mean the token is not present in the pre-gathered prior (happens only for text modality).
+        # In that case, give a constant prior
+        adjusted_classes = torch.where(classes == -1, torch.ones_like(classes) * module.cond_prior.shape[1],
+                                       classes) #negative indexing doesn't work, so convert to positive
+        constant_prior = (torch.ones_like(module.prior) / len(module.prior)).unsqueeze(1)
+        dependent_prior_per_token = torch.cat((module.cond_prior, constant_prior),dim=-1).index_select(1, adjusted_classes)
+        dependent_prior_per_token /= dependent_prior_per_token.sum(
+            0)  # normalize so that for each token,  sum of weights is 1
+        z = torch.mul(z_hat.permute(2, 1, 0), dependent_prior_per_token).permute(2, 1, 0).sum(
+            1)
+    else:
+        z = torch.matmul(module.prior.unsqueeze(0), z_hat).squeeze(
+            1)  # torch.Size([box, 1, 2048])->torch.Size([box, 2048])
+    return z
 
 
 class Causal_t(nn.Module):
@@ -1594,6 +1612,8 @@ class Causal_t(nn.Module):
         self.args = args
         # Following  https://pytorch-lightning.readthedocs.io/en/latest/advanced/multi_gpu.html#init-tensors-using-type-as-and-register-buffer
         self.register_buffer("dic_z", torch.tensor(np.load("./dic/dic_t.npy"), dtype=torch.float))
+        if self.args is not None and self.args.dependent_prior:
+            self.register_buffer("cond_prior", torch.tensor(pickle.load(open("../cond_probs_v_and_t_and_combo",'rb'))['text'],dtype=torch.float))
         self.register_buffer("prior", torch.tensor(np.load("./dic/prior_t.npy"), dtype=torch.float))
         nn.init.normal_(self.Wy.weight, std=0.02)
         nn.init.normal_(self.Wz.weight, std=0.02)
@@ -1601,18 +1621,14 @@ class Causal_t(nn.Module):
         nn.init.constant_(self.Wz.bias, 0)
         # self.id2class = np.load("./dic/id2class.npy", allow_pickle=True).item()
 
-    def forward(self, y):
+    def forward(self, y,og_classes=None):
         temp = []
-        for sentence in y:
+        for i, sentence in enumerate(y):
             attention = torch.mm(self.Wy(sentence), self.Wz(self.dic_z).t()) / (self.embedding_size ** 0.5)
             attention = F.softmax(attention, 1)  # torch.Size([box, 1601])
             z_hat = attention.unsqueeze(2) * self.dic_z.unsqueeze(0)  # torch.Size([box, 1601, 2048])
             # Nathan
-            if self.args.no_prior:
-                z = torch.mean(z_hat,1).shape
-            else:
-                z = torch.matmul(self.prior.unsqueeze(0), z_hat).squeeze(
-                1)  # torch.Size([box, 1, 2048])->torch.Size([box, 2048]) # TODO fix RuntimeError: mat1 dim 1 must match mat2 dim 0
+            z = apply_prior(self,i, og_classes, z_hat)
             temp.append(z)
         temp = torch.stack(temp, 0)
         return temp
@@ -1630,30 +1646,28 @@ class Causal_t2v(nn.Module):
         # self.prior = torch.tensor(np.load("./dic/prior_v.npy"), dtype=torch.float).cuda()
         # Following  https://pytorch-lightning.readthedocs.io/en/latest/advanced/multi_gpu.html#init-tensors-using-type-as-and-register-buffer
         self.register_buffer("dic_z", torch.tensor(np.load("./dic/dic_v.npy"), dtype=torch.float))
+        if self.args is not None and self.args.dependent_prior:
+            self.register_buffer("cond_prior", torch.tensor(pickle.load(open("../cond_probs_v_and_t_and_combo",'rb'))['image_given_text'],dtype=torch.float))
         self.register_buffer("prior", torch.tensor(np.load("./dic/prior_v.npy"), dtype=torch.float))
         nn.init.normal_(self.Wy.weight, std=0.02)
         nn.init.normal_(self.Wz.weight, std=0.02)
         nn.init.constant_(self.Wy.bias, 0)
         nn.init.constant_(self.Wz.bias, 0)
 
-    def forward(self, y):
+    def forward(self, y,og_classes=None):
         temp = []
         # Class = torch.argmax(image_target, 2, keepdim=True)
         # for boxes, cls in zip(y, Class):
-        for boxes in y:
-            attention = torch.mm(self.Wy(boxes), self.Wz(self.dic_z).t()) / (self.embedding_size ** 0.5)
+        # for i, boxes in enumerate(y):# Nathan: they mixed up nomenclature
+        for i, sentence in enumerate(y):
+            attention = torch.mm(self.Wy(sentence), self.Wz(self.dic_z).t()) / (self.embedding_size ** 0.5)
             attention = F.softmax(attention, 1)  # torch.Size([box, 1601])
             z_hat = attention.unsqueeze(2) * self.t2v(self.dic_z).unsqueeze(0)  # torch.Size([box, 1601, 2048])
             # Nathan
-            if self.args.no_prior:
-                z = torch.mean(z_hat,1).shape
-            else:
-                z = torch.matmul(self.prior.unsqueeze(0), z_hat).squeeze(
-                1)  # torch.Size([box, 1, 2048])->torch.Size([box, 2048])
+            z = apply_prior(self,i, og_classes, z_hat)
             temp.append(z)
         temp = torch.stack(temp, 0)
         return temp
-
 
 class Causal_v2t(nn.Module):
     def __init__(self,args):
@@ -1667,6 +1681,8 @@ class Causal_v2t(nn.Module):
         # self.prior = torch.tensor(np.load("./dic/prior_t.npy"), dtype=torch.float).cuda()
         # Following  https://pytorch-lightning.readthedocs.io/en/latest/advanced/multi_gpu.html#init-tensors-using-type-as-and-register-buffer
         self.register_buffer("dic_z", torch.tensor(np.load("./dic/dic_t.npy"), dtype=torch.float))
+        if self.args is not None and self.args.dependent_prior:
+            self.register_buffer("cond_prior", torch.tensor(pickle.load(open("../cond_probs_v_and_t_and_combo",'rb'))['text_given_image'],dtype=torch.float))
         self.register_buffer("prior", torch.tensor(np.load("./dic/prior_t.npy"), dtype=torch.float))
         nn.init.normal_(self.Wy.weight, std=0.02)
         nn.init.normal_(self.Wz.weight, std=0.02)
@@ -1674,18 +1690,16 @@ class Causal_v2t(nn.Module):
         nn.init.constant_(self.Wz.bias, 0)
         # self.id2class = np.load("./dic/id2class.npy", allow_pickle=True).item()
 
-    def forward(self, y):
+    def forward(self, y,og_classes=None):
         temp = []
-        for sentence in y:
-            attention = torch.mm(self.Wy(sentence), self.Wz(self.dic_z).t()) / (self.embedding_size ** 0.5)
+        # for i, sentence in enumerate(y):# Nathan: they mixed up nomenclature
+        # for sentence in y:
+        for i, boxes in enumerate(y):
+            attention = torch.mm(self.Wy(boxes), self.Wz(self.dic_z).t()) / (self.embedding_size ** 0.5)
             attention = F.softmax(attention, 1)  # torch.Size([box, 1601])
             z_hat = attention.unsqueeze(2) * self.v2t(self.dic_z).unsqueeze(0)  # torch.Size([box, 1601, 2048])
             # Nathan
-            if self.args.no_prior:
-                z = torch.mean(z_hat,1).shape
-            else:
-                z = torch.matmul(self.prior.unsqueeze(0), z_hat).squeeze(
-                1)  # torch.Size([box, 1, 2048])->torch.Size([box, 2048])
+            z = apply_prior(self,i, og_classes, z_hat)
             temp.append(z)
         temp = torch.stack(temp, 0)
         return temp
@@ -1723,8 +1737,16 @@ class BertForMultiModalPreTraining(BertPreTrainedModel, PLBertForMultimodalPretr
             self.vis_criterion = nn.KLDivLoss(reduction="none")
         # self.save_hyperparameters()
         self.train_dataset = None
-
-
+        if self.args is not None and self.args.dependent_prior:
+            '''
+            In python console:
+            o = -torch.ones(self.bert.embeddings.word_embeddings.weight.shape[0]) # 30522
+            for v_idx,z_idx in self.id2class.items():
+                o[v_idx] = z_idx
+    
+            np.save('../id2class_vector.npy',o.numpy())
+            '''
+            self.register_buffer("id2class_vector", torch.tensor(np.load("../id2class_vector.npy"), dtype=torch.int))
     # def get_batch_idx_start(self):
     #     core_ds = get_core_ds(self.train_dataset)
     #     batch_size = self.train_dataset.batch_size
@@ -1775,12 +1797,21 @@ class BertForMultiModalPreTraining(BertPreTrainedModel, PLBertForMultimodalPretr
         # Added by jt
 
         if masked_lm_labels is not None and next_sentence_label is not None and image_target is not None:
+            if self.args is not None and self.args.dependent_prior:
+                og_text_vocab_ids = torch.where(masked_lm_labels != -1, masked_lm_labels, input_ids)
+                og_text_classes = self.id2class_vector.index_select(-1, og_text_vocab_ids.reshape(-1)).reshape(og_text_vocab_ids.shape)
+                og_region_classes = image_target.argmax(-1)
+                causal_sequence_output_v = self.causal_v(sequence_output_v[:, 1:],og_region_classes)
+                causal_sequence_output_t = self.causal_t(sequence_output_t,og_text_classes)
 
-            causal_sequence_output_v = self.causal_v(sequence_output_v[:, 1:])
-            causal_sequence_output_t = self.causal_t(sequence_output_t)
+                causal_sequence_output_v2t = self.causal_v2t(sequence_output_v[:, 1:],og_region_classes)
+                causal_sequence_output_t2v = self.causal_t2v(sequence_output_t,og_text_classes)
+            else:
+                causal_sequence_output_v = self.causal_v(sequence_output_v[:, 1:])
+                causal_sequence_output_t = self.causal_t(sequence_output_t)
 
-            causal_sequence_output_v2t = self.causal_v2t(sequence_output_v[:, 1:])
-            causal_sequence_output_t2v = self.causal_t2v(sequence_output_t)
+                causal_sequence_output_v2t = self.causal_v2t(sequence_output_v[:, 1:])
+                causal_sequence_output_t2v = self.causal_t2v(sequence_output_t)
 
             prediction_scores_t, prediction_scores_v, seq_relationship_score, \
             causal_prediction_v_loss, causal_prediction_t_loss, \

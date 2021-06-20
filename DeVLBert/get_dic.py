@@ -16,7 +16,8 @@ from tqdm import tqdm, trange
 import torch
 from torch.utils.data import DataLoader, Dataset, RandomSampler
 from torch.utils.data.distributed import DistributedSampler
-from tensorboardX import SummaryWriter
+# from tensorboardX import SummaryWriter
+from pytorch_lightning.loggers.tensorboard import SummaryWriter
 
 from pytorch_pretrained_bert.tokenization import BertTokenizer
 from pytorch_pretrained_bert.optimization import BertAdam, WarmupLinearSchedule
@@ -224,8 +225,6 @@ def main():
         timeStamp = strftime("%d-%b-%y-%X-%a", gmtime())
         timeStamp += "_{:0>6d}".format(random.randint(0, 10e6))
 
-    savePath = os.path.join(args.output_dir, timeStamp)
-
     config = BertConfig.from_json_file(args.config_file)
 
     if args.freeze > config.t_biattention_id[0]:
@@ -281,13 +280,14 @@ def main():
             special_ids.add(v)
 
     train_dataset = ConceptCapLoaderTrain(
-        args.train_file,
         tokenizer,
         seq_len=args.max_seq_length,
         batch_size=args.train_batch_size,
         predict_feature=args.predict_feature,
         num_workers=args.num_workers,
         distributed=args.distributed,
+        shuffle=False,
+        args=args
     )
 
     # validation_dataset = ConceptCapLoaderVal(
@@ -474,10 +474,14 @@ def main():
     id2class = np.load(ID2CLASS_PATH, allow_pickle=True).item()
     noun_size = len(id2class)
     print("Noun vocabulary size is {}".format(noun_size))
-    prior_t = torch.zeros((noun_size), dtype=torch.float64).cuda()
-    dic_t = torch.zeros((noun_size, 768), dtype=torch.float64).cuda()
-    prior_v = torch.zeros((1601), dtype=torch.float64).cuda()
-    dic_v = torch.zeros((1601, 2048), dtype=torch.float64).cuda()
+    if args.get_cooc_prior:
+        cooc_prior_t = torch.zeros((noun_size,noun_size), dtype=torch.float64).cuda()
+        cooc_prior_v = torch.zeros((1601,1601), dtype=torch.float64).cuda()
+    else:
+        prior_t = torch.zeros((noun_size), dtype=torch.float64).cuda()
+        dic_t = torch.zeros((noun_size, 768), dtype=torch.float64).cuda()
+        prior_v = torch.zeros((1601), dtype=torch.float64).cuda()
+        dic_v = torch.zeros((1601, 2048), dtype=torch.float64).cuda()
     if default_gpu:
         iterator = tqdm(enumerate(train_dataset, 1), total=len(train_dataset))
     else:

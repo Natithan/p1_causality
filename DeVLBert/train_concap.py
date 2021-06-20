@@ -101,6 +101,11 @@ def add_program_argparse_args(parser):
         help="Whether to skip weighting elements of the confounder dictionary by their prior frequency."
     )
     parser.add_argument(
+        "--dependent_prior", action="store_true",
+        help="Whether to weight elements of the confounder dictionary by a dependent prior, rather than "
+             "an independent one."
+    )
+    parser.add_argument(
         "--empty_data", action="store_true",
         help="Whether to use fake empty data (to quickly check between-epoch functionality)."
     )
@@ -849,6 +854,8 @@ def main_pl():
         list_of_pt2_ckpts = glob.glob(f'{args.output_dir}/epoch=*{PT2_REGION_MASK_PROB}.ckpt')
         if len(list_of_pt2_ckpts) > 0:
             myprint("args.pt2 true, but pt2 intermediate checkpoints found. Restarting from those.")
+            latest_ckpt = max(list_of_pt2_ckpts, key=os.path.getctime)
+            args.trainer.resume_from_checkpoint = latest_ckpt
         else:
             PT1_REGION_MASK_PROB = 0.15
             list_of_pt1_ckpts = glob.glob(f'{args.output_dir}/epoch=*{PT1_REGION_MASK_PROB}.ckpt')

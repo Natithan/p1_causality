@@ -12,9 +12,9 @@ from constants import DEVLBERT_ROOT_DIR, LMDB_PATHS, MTURK_DIR, ARWEN_LMDB_PATHS
 import random
 from pathlib import Path
 import numpy as np
-from pretorch_util import get_free_gpus
+from pretorch_util import get_really_free_gpus
 myrank = 0
-os.environ['CUDA_VISIBLE_DEVICES'] = ",".join([str(i) for i in get_free_gpus()][myrank])
+os.environ['CUDA_VISIBLE_DEVICES'] = ",".join([str(i) for i in get_really_free_gpus()][myrank])
 MASTER_PORT = f'{12355+ myrank}'
 import torch
 import torch.nn.functional as F
@@ -42,22 +42,18 @@ TMP_DEVLBERT_PATH = Path(
 CFG_PATH = Path(DEVLBERT_ROOT_DIR, "config/bert_base_6layer_6conect.json")
 GROUND_TRUTH_PATH = Path(MTURK_DIR, 'output_mturk', 'pair_annotations_0.8_no_cfdnce_weight.tsv')
 
-STATISTIC = 'mAP'
+# STATISTIC = 'mAP'
 # STATISTIC = 'avgAtt'
 
 PRETRAINED_PATH = TMP_DEVLBERT_PATH # MY_DEVLBERT_PATH OG_DEVLBERT_PATH TMP_DEVLBERT_PATH
 
-DATASET = 'coca'
+# DATASET = 'coca'
 # DATASET = 'flickr30k'
 
 # OUT_DIR = Path(PROJECT_ROOT_DIR, f'{STATISTIC}_output')
-OUT_DIR = Path(PROJECT_ROOT_DIR, f'{STATISTIC}_output_debug')
-AA = ('avgAtt' == STATISTIC)
+# OUT_DIR = Path(PROJECT_ROOT_DIR, f'{STATISTIC}_output_debug')
 
 BATCH_SIZE = 32
-
-MAX_T = 60
-# MAX_T = 60 * 60 * 12
 
 
 class RandomAPExact:
@@ -87,10 +83,30 @@ def add_program_argparse_args(parser):
     )
     parser.add_argument(
         "--out_dir",
-        default=OUT_DIR,
         type=str,
         # required=True,
         help="The directory where to save output score files",
+    )
+    parser.add_argument(
+        "--statistic",
+        default='mAP',
+        type=str,
+        # required=True,
+        help="What to calculate. Options are 'mAP' and 'avgAtt'",
+    )
+    parser.add_argument(
+        "--dataset",
+        default='coca',
+        type=str,
+        # required=True,
+        help="Which source LMDB-stored RPN-extracted features to use. Options are 'coca' and 'flickr30k'",
+    )
+    parser.add_argument(
+        "--max_t",
+        default=-1,
+        type=int,
+        # required=True,
+        help="If not doing a full run, max time to iterate for",
     )
     return parser
 
@@ -99,6 +115,7 @@ def main_single_process(rank, world_size, run_id):
     parser = jsonargparse.ArgumentParser()
     parser = add_program_argparse_args(parser)
     args = parser.parse_args()
+    AA = (args.statistic == 'avgAtt')
     setup(rank=rank, world_size=world_size)
     model = BertForMultiModalPreTraining.from_pretrained(args.checkpoint, config=BertConfig.from_json_file(CFG_PATH))
     device = torch.device(f"cuda:{rank}")
@@ -106,7 +123,9 @@ def main_single_process(rank, world_size, run_id):
     tokenizer = BertTokenizer.from_pretrained(
         "bert-base-uncased", do_lower_case=True
     )
-    if DATASET == 'coca':
+
+    if args.dataset == 'coca':
+        pass
         train_dataset = ConceptCapLoaderTrain(
             tokenizer,
             lmdb_paths=LMDB_PATHS,
@@ -116,7 +135,7 @@ def main_single_process(rank, world_size, run_id):
             shuffle=False,
             num_workers=0
         )
-    elif DATASET == 'flickr30k':
+    elif args.dataset == 'flickr30k':
         from devlbert.datasets.retreival_dataset import MyRetreivalDataset
         from torch.utils.data import DataLoader
         train_dataset = \
@@ -152,12 +171,32 @@ def main_single_process(rank, world_size, run_id):
     START_T = t()  # TODO only consider non-masked tokens in mAP count?
     attentionAndCount_for_classid = {}
 
+    # TEMP_LMDB_PATHS = [f"/cw/working-arwen/nathan/features_CoCa_lmdb/full_coca_36_{i}_of_4.lmdb" for i in range(4)]
+
+    # for LMDB_PATH in TEMP_LMDB_PATHS: # Temp fix while downloading all to arwen
+    #     print("TEMP GOING OVER LMDB PATHS ONE BY ONE WHILE WAITING FOR THEM TO DOWNLOAD")
+    #     if DATASET == 'coca':
+    #         train_dataset = ConceptCapLoaderTrain(
+    #             tokenizer,
+    #             lmdb_paths=[LMDB_PATH],
+    #             seq_len=36,
+    #             batch_size=BATCH_SIZE,
+    #             predict_feature=False,
+    #             shuffle=False,
+    #             num_workers=0,
+    #             caption_path='/cw/working-arwen/nathan/features_CoCa_lmdb/caption_train.json'
+    #         )
+    LAST_SAVE_T = t()
     for batch_num, batch in enumerate(tqdm(train_dataset,
                                            desc=f'Rank {rank}')):  # TODO consider whether I need to run on all 3M pairs to make my case
-        if MAX_T > 0:
-            if t() - START_T > MAX_T:
+        if args.max_t > 0:
+            if t() - START_T > args.max_t:
                 print("=" * 50, "Stopping early for debugging", "=" * 50)
                 break
+        # if t() - LAST_SAVE_T > 15000:
+        #     LAST_SAVE_T = t()
+        #     # save_stuff(args, attentionAndCount_for_classid, batch_num, gt, mAP_per_class_dict, rank, run_id,extra_name=os.path.basename(LMDB_PATH))
+        #     save_stuff(args, attentionAndCount_for_classid, batch_num, gt, mAP_per_class_dict, rank, run_id)
         # print("\r\nbatch load time", t()-sb)
         batch = tuple(tp.to(device, non_blocking=True) for tp in batch)
         if type(train_dataset) == ConceptCapLoaderTrain:
@@ -221,7 +260,7 @@ def main_single_process(rank, world_size, run_id):
         #                                                               image_mask[b_idx]) if m != 0])
         # print("Forward",t() - s)
 
-        if AA:
+        if args.statistic == 'avgAtt':
             for i, classid in enumerate(max_box_ids):
                 classid = int(classid)
                 att = attention[i].detach().cpu().numpy()
@@ -297,15 +336,21 @@ def main_single_process(rank, world_size, run_id):
                     mAP_per_class_dict['mAP_baseline_emp'][CLASSES[int(effect_object_id)]].append(AP_baseline_emp)
                     add_or_append(times, 'else', t() - g)
 
-                # print(confounders_for_objects_for_id)
-            # print("for box_idx, effect_object_id",t()-s)
-            #
-            # for k, v in times.items():
-            #     print((k, sum(v) / len(v)))
-        sb = t()
-    if AA:
-        arr = np.zeros((1601, 1601))
-        arr -= 1
+                    # print(confounders_for_objects_for_id)
+                # print("for box_idx, effect_object_id",t()-s)
+                #
+                # for k, v in times.items():
+                #     print((k, sum(v) / len(v)))
+            sb = t()
+    save_stuff(args, attentionAndCount_for_classid, batch_num, gt, mAP_per_class_dict, rank, run_id)
+    if world_size > 1:
+        cleanup()
+
+
+
+def save_stuff(args, attentionAndCount_for_classid, batch_num, gt, mAP_per_class_dict, rank, run_id,extra_name=''):
+    if args.statistic == 'avgAtt':
+        arr = np.zeros((1601, 1601)) - 1
         for k, v in attentionAndCount_for_classid.items():
             arr[k] = v['attention']
         avgAtt_df = pd.DataFrame(data=arr, index=CLASSES, columns=CLASSES)
@@ -313,7 +358,10 @@ def main_single_process(rank, world_size, run_id):
         for id in attentionAndCount_for_classid:
             counts[id] = attentionAndCount_for_classid[id]['count']
         avgAtt_df.insert(0, "Counts", counts, True)
+        if not os.path.exists(args.out_dir):
+            os.makedirs(args.out_dir)
         avgAtt_output_file = Path(args.out_dir, f'avgAtt_{run_id}_{batch_num}_rank{rank}.csv')
+        print(f'Saving to {avgAtt_output_file}')
         avgAtt_df.to_csv(avgAtt_output_file)
 
         sorted_df = avgAtt_df.sort_values(by='Counts', ascending=False)
@@ -323,13 +371,17 @@ def main_single_process(rank, world_size, run_id):
              in a.items()}).transpose()
         with pd.option_context("max_colwidth", 1000):
             print(out_df.to_latex(header=False, bold_rows=True))
+            print(out_df.to_latex(header=False, bold_rows=True),file=open(Path(args.out_dir,f'latex_top_avgAtt_{run_id}.txt'),'w'))
 
     else:
 
         per_occured_class_dict_to_store = {
-            model: {(cls,len(avpres),str(gt.get_known_gts(word_to_id(cls))[['word_X','word_Y','cause_candidate_label']]).replace('\n','\__')): sum(avpres) / len(avpres)
+            model: {(cls, len(avpres),
+                     str(gt.get_known_gts(word_to_id(cls))[['word_X', 'word_Y', 'cause_candidate_label']]).replace('\n',
+                                                                                                                   '\__')): sum(
+                avpres) / len(avpres)
                     for cls, avpres in
-                    per_model_values.items()  if len(avpres) > 0}
+                    per_model_values.items() if len(avpres) > 0}
             for model, per_model_values in mAP_per_class_dict.items()
         }
         avg_dict_to_store = {m: [sum(d.values()) / len(d)] for m, d in
@@ -349,10 +401,10 @@ def main_single_process(rank, world_size, run_id):
             if not os.path.exists(args.out_dir):
                 os.makedirs(args.out_dir)
             # output_file = Path(args.out_dir, f'{name}_mAP_comparison_{run_id}_{batch_num}_rank{rank}_{"my_devlbert" if PRETRAINED_PATH == MY_DEVLBERT_PATH else "og_devlbert"}.csv')
-            output_file = Path(args.out_dir, f'{name}_mAP_comparison_{run_id}_{batch_num}_rank{rank}.csv')
+            output_file = Path(args.out_dir, f'{name}_mAP_comparison_{run_id}_{batch_num}_rank{rank}{extra_name}.csv')
+            pd.set_option('display.max_colwidth', None)
+            print(df_to_store)
             df_to_store.to_csv(output_file, index=False if (name == 'avg') else True)
-    if world_size > 1:
-        cleanup()
 
 
 class GT:
@@ -428,16 +480,16 @@ def add_or_append(d, k, v):
 
 
 def main():
-    n_procs = len(get_free_gpus())
+    # n_procs = len(get_free_gpus())
     n_procs = 1
     run_id = int(t())
-    main_single_process(0,1,run_id)
+    main_single_process(rank=0,world_size=1,run_id=run_id)
     # mp.spawn(main_single_process,
     #          args=(n_procs, run_id),
     #          nprocs=n_procs,
     #          join=True)
-    if not AA:
-        pass
+    # if not AA:
+    #     pass
         # prestring = 'avgAtt_' if AA else 'mAP_comparison_'
         # partial_files = glob.glob(f'{args.out_dir.as_posix()}/{prestring}{run_id}_*')
         # assert len(partial_files) == n_procs

@@ -1,24 +1,26 @@
 #!/bin/bash
 
 #PBS -A lcalculus
-#PBS -l nodes=1:ppn=16:gpus=4:cascadelake
+#PBS -l nodes=1:ppn=18:gpus=2:skylake
 #PBS -l partition=gpu
-#PBS -l walltime=168:00:00
+#PBS -l walltime=0:10:00
 #PBS -l pmem=5gb
 #PBS -m abe
 #PBS -j oe
 #PBS -M nathan.cornille@kuleuven.be
-#PBS -N cascadelake_full_v5
+#PBS -N mini_dependent_prior
 
 source $HOME/.bashrc
 conda activate devlbert
+OUTPUT_ROOT_DIR=/scratch/leuven/336/vsc33642
+EXP_NAME=dependent_prior_devlbert_checkpunten
 
 
-## First 12 epochs of training, with region mask probability 0.15
-#python train_concap.py --config config/pretrain_concap_devlbert.yml --region_mask_prob .15 --trainer.auto_select_gpus false --trainer.gpus 4 --train_batch_size 128 --checkpoint_every_n_train_steps 0 --output_dir /scratch/leuven/336/vsc33642/v5_devlbert_checkpunten
+# First 12 epochs of training, with region mask probability 0.15
+python train_concap.py --config config/pretrain_concap_devlbert.yml --region_mask_prob .15 --trainer.auto_select_gpus false --trainer.gpus 2 --train_batch_size 32 --checkpoint_every_n_train_steps 0 --output_dir $OUTPUT_ROOT_DIR/$EXP_NAME --dependent_prior --mini --exact_epochs 2
 
 ## Further 12 epochs of training, with region mask probability 0.3
-python train_concap.py --config config/pretrain_concap_devlbert.yml --region_mask_prob .3 --trainer.auto_select_gpus false --pt2_run --trainer.gpus 4 --train_batch_size 128 --checkpoint_every_n_train_steps 0 --output_dir /scratch/leuven/336/vsc33642/v5_devlbert_checkpunten
+python train_concap.py --config config/pretrain_concap_devlbert.yml --region_mask_prob .3 --trainer.auto_select_gpus false --pt2_run --trainer.gpus 2 --train_batch_size 32 --checkpoint_every_n_train_steps 0 --output_dir $OUTPUT_ROOT_DIR/$EXP_NAME --dependent_prior --mini --exact_epochs 2
 
 ## Further 12 epochs of training, with region mask probability 0.3
 #python train_concap.py --config config/pretrain_concap_devlbert.yml --region_mask_prob .15

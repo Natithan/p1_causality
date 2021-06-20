@@ -1,0 +1,126 @@
+#!/bin/bash
+
+#PBS -A lcalculus
+#PBS -l partition=gpu
+#PBS -l pmem=5gb
+#PBS -m abe
+#PBS -j oe
+#PBS -M nathan.cornille@kuleuven.be
+
+source $HOME/.bashrc
+conda activate devlbert
+
+MINI=false
+CFG_NAME=bert_base_6layer_6conect
+VILBERT=false
+ONLY_EVAL=false
+
+#while [[ "$#" -gt 0 ]]; do
+#    key="$1"
+#    echo "key"
+#    echo $key
+#    case $key in
+#        -p|--pretrained_ckpt) pretrained_ckpt="$2"; shift ;;
+#        -f|--finetuned_ckpt_dir) finetuned_ckpt_dir="$2"; shift ;;
+#        -o|--output_dir) output_dir="$2"; shift ;;
+#        -w|--world_size) world_size="$2"; shift ;;
+#        --vilbert) VILBERT=true; shift ;;
+#        --only_eval) ONLY_EVAL=true; shift ;;
+#        --mini) MINI=true; shift ;;
+#        *) echo "Unknown parameter passed: $key"; exit 1 ;;
+#    esac
+#    shift
+#done
+
+
+# Adapted from https://stackoverflow.com/a/14203146/6297057
+#POSITIONAL=()
+while [[ $# -gt 0 ]]
+do
+key="$1"
+echo "key"
+echo $key
+
+case $key in
+    -p|--pretrained_ckpt)
+    pretrained_ckpt="$2"
+    shift # past argument
+    shift # past value
+    ;;
+    -f|--finetuned_ckpt_dir)
+    finetuned_ckpt_dir="$2"
+    shift # past argument
+    shift # past value
+    ;;
+    -o|--output_dir)
+    output_dir="$2"
+    shift # past argument
+    shift # past value
+    ;;
+    -w|--world_size)
+    world_size="$2"
+    shift # past argument
+    shift # past value
+    ;;
+    --vilbert)
+    VILBERT=true
+    shift # past argument
+    ;;
+    --only_eval)
+    ONLY_EVAL=true
+    shift # past argument
+    ;;
+    --mini)
+    MINI=true
+    shift # past argument
+    ;;
+#    *)    # unknown option
+#    POSITIONAL+=("$1") # save it in an array for later
+#    shift # past argument
+#    ;;
+    *) echo "Unknown parameter passed: $key"; exit 1 ;;
+esac
+done
+#set -- "${POSITIONAL[@]}" # restore positional parameters
+
+
+PRETRAINED_CKPT_RUN_NAME=`basename "$finetuned_ckpt_dir"`
+
+echo "pretrained_ckpt: ${pretrained_ckpt}"
+if [ "$MINI" = true ]
+then
+    echo 'mini was used'
+    mini_arg='--mini'
+    FINETUNED_CKPT_EPOCH=1
+    batch_size=8
+else
+    mini_arg=''
+    FINETUNED_CKPT_EPOCH=19
+    batch_size=128
+fi
+
+
+if [ "$VILBERT" = true ]
+then
+    echo 'vilbert was used'
+    vilbert_arg='--vilbert'
+else
+    vilbert_arg=''
+fi
+
+if ! [ "$ONLY_EVAL" = true ]
+then
+  # Finetuning on VQA
+  python train_tasks.py --bert_model bert-base-uncased --from_pretrained $pretrained_ckpt --config_file config/${CFG_NAME}.json --learning_rate 4e-5 --num_workers 0 --tasks 0 --save_name $PRETRAINED_CKPT_RUN_NAME --use_ema --ema_decay_ratio 0.9999 --batch_size $batch_size --output_dir $finetuned_ckpt_dir $mini_arg --world_size "$world_size"
+fi
+# Evaluating on VQA
+python eval_tasks.py --bert_model bert-base-uncased --from_pretrained  $finetuned_ckpt_dir/VQA_${CFG_NAME}-$PRETRAINED_CKPT_RUN_NAME/pytorch_model_${FINETUNED_CKPT_EPOCH}_ema.bin  --config_file config/bert_base_6layer_6conect.json --tasks 0 --split test --save_name default  $mini_arg --output_dir $output_dir/VQA $vilbert_arg
+
+#PRETRAINED_CKPT_RUN_NAME=gimli_1
+#CFG_NAME=bert_base_6layer_6conect
+#finetuned_ckpt_dir=/scratch/leuven/336/vsc33642/PP_ckpts/$PRETRAINED_CKPT_RUN_NAME
+#FINETUNED_CKPT_EPOCH=19
+#output_dir=/data/leuven/336/vsc33642/p1_causality/PP_output/$PRETRAINED_CKPT_RUN_NAME
+#
+#
+#python eval_tasks.py --bert_model bert-base-uncased --from_pretrained  $finetuned_ckpt_dir/VQA_${CFG_NAME}-$PRETRAINED_CKPT_RUN_NAME/pytorch_model_${FINETUNED_CKPT_EPOCH}_ema.bin  --config_file config/bert_base_6layer_6conect.json --tasks 0 --split test --save_name default  $mini_arg --output_dir $output_dir/VQA

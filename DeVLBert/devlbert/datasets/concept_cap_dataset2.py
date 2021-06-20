@@ -1,24 +1,29 @@
 import copy
 
-from constants import LMDB_PATH, CAPTION_PATH
 from pathlib import Path
 
 import json
 import logging
 import os
 import random
+from typing import List
 
 import lmdb
 import numpy as np
 import tensorpack.dataflow as td
 
 import torch
+from constants import CAPTION_PATH, LMDB_PATHS, MINI_LMDB_PATHS, CENTI_LMDB_PATHS
+from tensorpack.dataflow.base import DataFlowReentrantGuard
+from tensorpack.dataflow.parallel import _repeat_iter, _ExceptionWrapper, _zmq_catch_error, _get_pipe_name, _bind_guard
+from tensorpack.utils.concurrency import enable_death_signal
 from torch.utils.data import Dataset
 from torch.utils.data.sampler import Sampler
 import torch.distributed as dist
 import sys
 import pdb
-from preprocess_util import MyLMDBSerializer
+# from preprocess_util import MyLMDBSerializer
+from my_lmdb import MyLMDBSerializer
 ROOT_FOLDER = "/cw/liir/NoCsBack/testliir/nathan/p1_causality/"
 # REGION_LEN = 84
 REGION_LEN = 36
@@ -105,60 +110,72 @@ class ConceptCapLoaderTrain(object):
     """
 
     def __init__(
-        self,
-        corpus_path,
-        tokenizer,
-        seq_len,
-        encoding="utf-8",
-        predict_feature=False,
-        hard_negative=False,
-        batch_size=512,
-        shuffle=False,
-        num_workers=25,
-        cache=50000,
-        drop_last=False,
-        cuda=False,
-        distributed=False,
-        visualization=False,
+            self,
+            tokenizer,
+            seq_len,
+            encoding="utf-8",
+            lmdb_paths: List = None,
+            predict_feature=False,
+            hard_negative=False,
+            batch_size=512,
+            shuffle=True,
+            num_workers=25,
+            cache=50000,
+            drop_last=False,
+            cuda=False,
+            distributed=True,
+            visualization=False,
+            savePath=None,
+            mini=False,
+            args=None
     ):
-
-        if dist.is_available() and distributed:
-            num_replicas = dist.get_world_size()
-            # assert num_replicas == 8
-            rank = dist.get_rank()
-            lmdb_file = "/mnt3/xuesheng/features_lmdb/CC/training_feat_part_" + str(rank) + ".lmdb" #TODO split access to the database here
-            # if not os.path.exists(lmdb_file):
-            # lmdb_file = "/srv/share/datasets/conceptual_caption/training_feat_part_" + str(rank) + ".lmdb"
-        # else:
-            # lmdb_file = "/coc/dataset/conceptual_caption/training_feat_all.lmdb"
-            # if not os.path.exists(lmdb_file):
-            # lmdb_file = Path(ROOT_FOLDER,"DeVLBert/features_lmdb/CC/training_feat_all.lmdb").as_posix()
-
-
-        print("Loading from %s" % LMDB_PATH)
-
-        if dist.is_available() and distributed:
-            ds = MyLMDBSerializer.load(LMDB_PATH, shuffle=False,rank=rank,nb_processes=dist.get_world_size())
+        if lmdb_paths:
+            lmdb_files = lmdb_paths
         else:
-            ds = td.LMDBSerializer.load(LMDB_PATH, shuffle=False)
-        self.num_dataset = len(ds)
+            # if dist.is_available() and distributed:
+            #     num_replicas = dist.get_world_size()
+            #     # assert num_replicas == 8
+            #     rank = dist.get_rank()
+            #     # if not os.path.exists(lmdb_file):
+            #     # lmdb_file = "/srv/share/datasets/conceptual_caption/training_feat_part_" + str(rank) + ".lmdb"
+            # else:
+            #     # lmdb_file = "/coc/dataset/conceptual_caption/training_feat_all.lmdb"
+            #     # if not os.path.exists(lmdb_file):
+            #     num_replicas = 1
+            #     rank = 0
+            #     print(f"WARNING: only loading from {LMDB_PATHS[rank]}")
+            #     # lmdb_file = "/mnt3/xuesheng/features_lmdb/CC/training_feat_part_0.lmdb" #Nathan
+            lmdb_files = LMDB_PATHS if not mini else MINI_LMDB_PATHS # MINI_LMDB_PATHS CENTI_LMDB_PATHS
+        self.args = args
+        caption_path = CAPTION_PATH
+        # caption_path = "/mnt3/xuesheng/features_lmdb/CC/caption_train.json"
 
+        print("Shuffle: ", shuffle)
+        ds = MyLMDBSerializer.load(lmdb_files, shuffle=shuffle,savePath=savePath)
+        self.num_dataset = len(ds)
+        self.savePath = savePath
         preprocess_function = BertPreprocessBatch(
-            CAPTION_PATH,
+            caption_path,
             tokenizer,
             seq_len,
             REGION_LEN,
             self.num_dataset,
             encoding="utf-8",
-            predict_feature=predict_feature,
+            predict_feature=predict_feature
         )
 
         # ds = td.LocallyShuffleData(ds, cache)
         # ds = td.PrefetchData(ds, 5000, 1)
         ds = td.MapData(ds, preprocess_function)
         # self.ds = td.PrefetchData(ds, 1)
-        # ds = td.PrefetchDataZMQ(ds, num_workers)
-        self.ds = td.BatchData(ds, batch_size, remainder=True)
+        # ds = td.PrefetchDataZMQ(ds, num_workers) Nathan commenting out in hope of bypassing forking-debugger incompatibility
+        # self.ds = td.BatchData(ds, batch_size)
+        if num_workers > 0:
+            raise NotImplementedError
+            ds = MyMultiProcessRunnerZMQ(ds, num_workers)
+        # if mini:
+        #     ds._size = MINI_SIZE
+        self.ds = td.BatchData(ds, batch_size)
         # self.ds = ds
         self.ds.reset_state()
 

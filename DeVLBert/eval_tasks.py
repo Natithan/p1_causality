@@ -9,7 +9,8 @@ import numpy as np
 import warnings
 
 warnings.simplefilter(action='ignore', category=FutureWarning)
-from tensorboardX import SummaryWriter
+# from tensorboardX import SummaryWriter
+from pytorch_lightning.loggers.tensorboard import SummaryWriter
 from tqdm import tqdm
 from bisect import bisect
 import yaml
@@ -118,6 +119,9 @@ def main():
     parser.add_argument(
         "--mini", action="store_true", help="whether to evaluate small part of the data, for quick-OK-run-check purposes"
     )
+    parser.add_argument(
+        "--vilbert", action="store_true", help="whether a vilbert checkpoint is being used"
+    )
     #endregion
     args = parser.parse_args()
     with open('devlbert_tasks.yml', 'r') as f:
@@ -139,9 +143,16 @@ def main():
     if args.baseline:
         from pytorch_pretrained_bert.modeling import BertConfig
         from devlbert.basebert import BaseBertForVLTasks
+    # else:
+    #     from devlbert.devlbert import BertConfig
+    #     from devlbert.devlbert import DeVLBertForVLTasks
+    elif args.vilbert:
+        from devlbert.vilbert import VILBertForVLTasks
+        from devlbert.vilbert import BertConfig
     else:
         from devlbert.devlbert import BertConfig
         from devlbert.devlbert import DeVLBertForVLTasks
+
 
     task_names = []
     for i, task_id in enumerate(args.tasks.split('-')):
@@ -150,7 +161,8 @@ def main():
         task_names.append(name)
 
     # timeStamp = '-'.join(task_names) + '_' + args.config_file.split('/')[1].split('.')[0]
-    timeStamp = args.from_pretrained.split('/')[-1] + '-' + args.save_name
+    # timeStamp = args.from_pretrained.split('/')[-1] + '-' + args.save_name
+    timeStamp = args.save_name
     savePath = os.path.join(args.output_dir, timeStamp)
 
     config = BertConfig.from_json_file(args.config_file)
@@ -189,15 +201,25 @@ def main():
 
     num_labels = max([dataset.num_labels for dataset in task_datasets_val.values()])
     # print([dataset.num_labels for dataset in task_datasets_val.values()], num_labels) #[3129] 3129
+
+    assert ('vilbert' in args.from_pretrained) == args.vilbert
     if args.baseline:
         model = BaseBertForVLTasks.from_pretrained(
+            args.from_pretrained, config, num_labels=num_labels, default_gpu=default_gpu
+            )
+    # else:
+    #     model = DeVLBertForVLTasks.from_pretrained(
+    #         args.from_pretrained, config, num_labels=num_labels, default_gpu=default_gpu
+    #         )
+    elif args.vilbert:
+        model = VILBertForVLTasks.from_pretrained(
             args.from_pretrained, config, num_labels=num_labels, default_gpu=default_gpu
             )
     else:
         model = DeVLBertForVLTasks.from_pretrained(
             args.from_pretrained, config, num_labels=num_labels, default_gpu=default_gpu
             )
-
+    assert model is not None, f"Model is None, maybe no checkpoint at {args.from_pretrained}?"
     task_losses = LoadLosses(args, task_cfg, args.tasks.split('-'))
     model.to(device)
     if args.local_rank != -1:

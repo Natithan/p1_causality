@@ -25,7 +25,8 @@ def run(q, num):
     se = set()
     nonu = ["NN", "NNS", "NNP", "NNPS"]
     for i, batch in tqdm(enumerate(ds.get_data(), 1),total=num_dataset):
-        image_feature_wp, image_target_wp, image_location_wp, num_boxes, image_h, image_w, image_id, caption = batch
+        # image_feature_wp, image_target_wp, image_location_wp, num_boxes, image_h, image_w, image_id, caption = batch
+        _, _, _, _, _, _, _, caption = batch
         tokens = tokenizer.tokenize(caption)
         while len(tokens) > 34:
             tokens.pop()

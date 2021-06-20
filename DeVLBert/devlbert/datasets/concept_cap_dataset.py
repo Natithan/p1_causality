@@ -151,7 +151,8 @@ class ConceptCapLoaderTrain(object):
             visualization=False,
             savePath=None,
             mini=False,
-            args=None
+            args=None,
+            caption_path=None
     ):
         if lmdb_paths:
             lmdb_files = lmdb_paths
@@ -171,7 +172,8 @@ class ConceptCapLoaderTrain(object):
             #     # lmdb_file = "/mnt3/xuesheng/features_lmdb/CC/training_feat_part_0.lmdb" #Nathan
             lmdb_files = LMDB_PATHS if not mini else MINI_LMDB_PATHS # MINI_LMDB_PATHS CENTI_LMDB_PATHS
         self.args = args
-        caption_path = CAPTION_PATH
+        if not caption_path:
+            caption_path = CAPTION_PATH
         # caption_path = "/mnt3/xuesheng/features_lmdb/CC/caption_train.json"
 
         print("Shuffle: ", shuffle)

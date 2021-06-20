@@ -1300,11 +1300,14 @@ class BertPreTrainedModel(nn.Module):
                                 'bert.pooler.dense.weight',
                                 'bert.pooler.dense.bias',
                                 'cls.seq_relationship.weight',
-                                'cls.seq_relationship.bias'
+                                'cls.seq_relationship.bias',
+                               # For loading concap-pretrained for ir-task-training. No actual causal stuff is used, but the weights are still there in DevlbertForDevlberttasks
+                               "cls.causal_.*",
 
             ]
+            print(unexpected_keys)
             assert all([any([bool(re.match(au, uk)) for au in allowed_unexpected]) for uk in
-                        unexpected_keys]), "Some unallowed keys missing from pretrained model"
+                        unexpected_keys]), "Some unallowed unexpected keys in pretrained model"
         if len(error_msgs) > 0 and default_gpu:
             raise RuntimeError(
                 "Error(s) in loading state_dict for {}:\n\t{}".format(

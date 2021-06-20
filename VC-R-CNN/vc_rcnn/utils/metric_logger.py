@@ -82,7 +82,8 @@ class TensorboardLogger(MetricLogger):
     @staticmethod
     def _get_tensorboard_writer(log_dir):
         try:
-            from tensorboardX import SummaryWriter
+            # from tensorboardX import SummaryWriter
+            from pytorch_lightning.loggers.tensorboard import SummaryWriter
         except ImportError:
             raise ImportError(
                 'To use tensorboard please install tensorboardX '

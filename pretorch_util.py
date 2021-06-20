@@ -11,6 +11,14 @@ def get_free_gpus():
     return free_gpus
 
 
+def get_really_free_gpus():  # Not even my processes
+    regex = r"MB \|(.*?)\n"
+    processes = [re.search(regex, l) for l in os.popen('gpustat --no-header').readlines()]
+    # free_gpus = [i for i, p in enumerate(processes) if p is not None and
+    #              all([('nathan' in s) for s in p.groups()[0].split()])]
+    free_gpus = [i for i, p in enumerate(processes) if p is not None and
+                 (len(p.groups()[0].split()) == 0)]
+    return free_gpus
 
 
 def rank_to_device(rank):
@@ -20,6 +28,3 @@ def rank_to_device(rank):
     free_gpus = get_free_gpus()
     assert len(free_gpus) > rank, "Rank larger than number of available GPUs"
     return free_gpus[rank]
-
-
-

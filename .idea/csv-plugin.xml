@@ -3,6 +3,62 @@
   <component name="CsvFileAttributes">
     <option name="attributeMap">
       <map>
+        <entry key="\PP_output\gimli_1\mAP_output\avg_mAP_comparison_1623692963_90760_rank0.csv">
+          <value>
+            <Attribute>
+              <option name="separator" value="," />
+            </Attribute>
+          </value>
+        </entry>
+        <entry key="\PP_output\gimli_1\mAP_output\per_class_mAP_comparison_1623692963_90760_rank0.csv">
+          <value>
+            <Attribute>
+              <option name="separator" value="," />
+            </Attribute>
+          </value>
+        </entry>
+        <entry key="\PP_output\gimli_2\mAP_output\avg_mAP_comparison_1623692846_90760_rank0.csv">
+          <value>
+            <Attribute>
+              <option name="separator" value="," />
+            </Attribute>
+          </value>
+        </entry>
+        <entry key="\PP_output\gimli_2\mAP_output\per_class_mAP_comparison_1623692846_90760_rank0.csv">
+          <value>
+            <Attribute>
+              <option name="separator" value="," />
+            </Attribute>
+          </value>
+        </entry>
+        <entry key="\PP_output\v4\mAP_output\avg_mAP_comparison_1623692993_90760_rank0.csv">
+          <value>
+            <Attribute>
+              <option name="separator" value="," />
+            </Attribute>
+          </value>
+        </entry>
+        <entry key="\PP_output\v4\mAP_output\per_class_mAP_comparison_1623692993_90760_rank0.csv">
+          <value>
+            <Attribute>
+              <option name="separator" value="," />
+            </Attribute>
+          </value>
+        </entry>
+        <entry key="\PP_output\v6\mAP_output\avg_mAP_comparison_1623692903_90760_rank0.csv">
+          <value>
+            <Attribute>
+              <option name="separator" value="," />
+            </Attribute>
+          </value>
+        </entry>
+        <entry key="\PP_output\v6\mAP_output\per_class_mAP_comparison_1623692903_90760_rank0.csv">
+          <value>
+            <Attribute>
+              <option name="separator" value="," />
+            </Attribute>
+          </value>
+        </entry>
         <entry key="\avgAtt_output\avgAtt_1618522221_506_rank0.csv">
           <value>
             <Attribute>
@@ -11,6 +67,27 @@
           </value>
         </entry>
         <entry key="\mturk_responses_clean.csv">
+          <value>
+            <Attribute>
+              <option name="separator" value="," />
+            </Attribute>
+          </value>
+        </entry>
+        <entry key="\z_reference\tmp\v4\mAP_output\avg_mAP_comparison_1623662055_21242_rank0.csv">
+          <value>
+            <Attribute>
+              <option name="separator" value="," />
+            </Attribute>
+          </value>
+        </entry>
+        <entry key="\z_reference\tmp\v4\mAP_output\avg_mAP_comparison_1623662055_24640_rank0.csv">
+          <value>
+            <Attribute>
+              <option name="separator" value="," />
+            </Attribute>
+          </value>
+        </entry>
+        <entry key="\z_reference\tmp\v4\mAP_output\avg_mAP_comparison_1623692993_10568_rank0.csv">
           <value>
             <Attribute>
               <option name="separator" value="," />

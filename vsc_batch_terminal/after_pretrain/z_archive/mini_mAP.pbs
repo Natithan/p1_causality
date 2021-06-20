@@ -15,9 +15,9 @@ source $HOME/.bashrc
 conda activate devlbert
 
 CKPT_ROOT_DIR=/scratch/leuven/336/vsc33642
-PRETRAINED_CKPT_NAME=v6_devlbert_checkpunten/epoch=3-step=22687-0.3.ckpt
-CODE_ROOT_DIR=/data/leuven/336/vsc33642/p1_causality/
+PRETRAINED_CKPT_NAME=v6_devlbert_checkpunten/epoch=11-step=68063-0.3.ckpt
+CODE_ROOT_DIR=/data/leuven/336/vsc33642/p1_causality
 OUT_DIR=mAP_output_vsc_debug
 
-python ../test_confounder_finding.py --checkpoint $CKPT_ROOT_DIR/$PRETRAINED_CKPT_NAME --out_dir $CODE_ROOT_DIR/$OUT_DIR
+python ../test_confounder_finding.py --checkpoint $CKPT_ROOT_DIR/$PRETRAINED_CKPT_NAME --out_dir $CODE_ROOT_DIR/$OUT_DIR --max_t 120
 

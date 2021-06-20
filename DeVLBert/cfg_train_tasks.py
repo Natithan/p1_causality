@@ -5,7 +5,7 @@ import sys
 from pretorch_util import get_free_gpus
 print(sys.argv)
 FGS = flags.FLAGS
-if os.path.basename(sys.argv[0]) == 'train_tasks.py':
+if os.path.basename(sys.argv[0]) in ('train_tasks.py','eval_tasks.py'):
     FGS = flags.FLAGS
     flags.DEFINE_string("bert_model","bert-base-uncased","Bert pre-trained model selected in the list: bert-base-uncased, "
              "bert-large-uncased, bert-base-cased, bert-base-multilingual, bert-base-chinese.")
@@ -52,9 +52,9 @@ if os.path.basename(sys.argv[0]) == 'train_tasks.py':
 
     # # eval_retrieval.py flags
     #
-    # flags.DEFINE_string("split","","which split to use.")
+    flags.DEFINE_string("split","","which split to use.")
     #
-    # flags.DEFINE_bool("zero_shot", False, "")
+    flags.DEFINE_bool("zero_shot", False, "")
     #
     #
     # # test_confounder_finding.py flags

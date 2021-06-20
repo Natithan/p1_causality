@@ -1,0 +1,70 @@
+#!/bin/bash
+
+#PBS -A lcalculus
+#PBS -l partition=gpu
+#PBS -l pmem=5gb
+#PBS -m abe
+#PBS -j oe
+#PBS -M nathan.cornille@kuleuven.be
+
+source $HOME/.bashrc
+conda activate devlbert
+
+MINI=false
+
+#while [[ "$#" -gt 0 ]]; do
+#    case $1 in
+#        -p|--pretrained_ckpt) pretrained_ckpt="$2"; shift ;;
+#        -o|--output_dir) output_dir="$2"; shift ;;
+#        --mini) MINI=true; shift ;;
+#        *) echo "Unknown parameter passed: $1"; exit 1 ;;
+#    esac
+#    shift
+#done
+
+
+# Adapted from https://stackoverflow.com/a/14203146/6297057
+#POSITIONAL=()
+while [[ $# -gt 0 ]]
+do
+key="$1"
+echo "key"
+echo $key
+
+case $key in
+    -p|--pretrained_ckpt)
+    pretrained_ckpt="$2"
+    shift # past argument
+    shift # past value
+    ;;
+    -o|--output_dir)
+    output_dir="$2"
+    shift # past argument
+    shift # past value
+    ;;
+    --mini)
+    MINI=true
+    shift # past argument
+    ;;
+#    *)    # unknown option
+#    POSITIONAL+=("$1") # save it in an array for later
+#    shift # past argument
+#    ;;
+    *) echo "Unknown parameter passed: $key"; exit 1 ;;
+esac
+done
+#set -- "${POSITIONAL[@]}" # restore positional parameters
+
+
+
+echo "pretrained_ckpt_name: ${pretrained_ckpt}"
+if [ "$MINI" = true ]
+then
+    echo 'mini was used'
+    max_t=60
+else
+    max_t=-1
+fi
+
+
+python ../test_confounder_finding.py --checkpoint $pretrained_ckpt --out_dir $output_dir/mAP_output --max_t $max_t

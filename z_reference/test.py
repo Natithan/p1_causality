@@ -3,8 +3,9 @@ import lmdb
 # ds = LMDBSerializer.load("/cw/liir/NoCsBack/testliir/nathan/p1_causality/DeVLBert/features_lmdb/CC/training_feat_all_debug_1613474882.lmdb")
 # ds.reset_state()
 # a = next(ds.get_data())
-
-
+import os
+import time
+import ray
 
 import pathlib
 import torchvision
@@ -92,28 +93,28 @@ def get_parallel(idx_range, out_list):
         out_list.append(txn.get(bb(i)))
 
 
-s = time.time()
-jobs = []
-out_list = []
-procs = 32
-for i in range(procs):
-    idx_range = range(10000)[cpu::NUM_CPUS]
-    jobs.append(mp.Process(target=get_parallel, args=out_list, idx_range))
-results = ray.get(futures)
-print(time.time() - s)
-
-s = time.time()
-futures = []
-NUM_CPUS = 32
-db = lmdb.open(f,
-               subdir=os.path.isdir(f),
-               readonly=True, lock=False, readahead=True,
-               map_size=1099511627776 * 2, max_readers=100)
-txn = db.begin()
-for o in range(10000):
-    txn.get(bb(i))
-results = ray.get(futures)
-print(time.time() - s)
+# s = time.time()
+# jobs = []
+# out_list = []
+# procs = 32
+# for i in range(procs):
+#     idx_range = range(10000)[cpu::NUM_CPUS]
+#     jobs.append(mp.Process(target=get_parallel, args=out_list, idx_range))
+# results = ray.get(futures)
+# print(time.time() - s)
+#
+# s = time.time()
+# futures = []
+# NUM_CPUS = 32
+# db = lmdb.open(f,
+#                subdir=os.path.isdir(f),
+#                readonly=True, lock=False, readahead=True,
+#                map_size=1099511627776 * 2, max_readers=100)
+# txn = db.begin()
+# for o in range(10000):
+#     txn.get(bb(i))
+# results = ray.get(futures)
+# print(time.time() - s)
 
 
 import multiprocessing as mp

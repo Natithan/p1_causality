@@ -16,9 +16,9 @@ OUTPUT_ROOT_DIR=/scratch/leuven/336/vsc33642
 EXP_NAME=vilbert_checkpunten
 
 # First 12 epochs of training, with region mask probability 0.15
-python train_concap.py --config config/pretrain_concap_devlbert.yml --region_mask_prob 0.15 --trainer.auto_select_gpus false --trainer.gpus 2 --train_batch_size 48 --output_dir $OUTPUT_ROOT_DIR$EXP_NAME --vilbert --mini --exact_epochs 2
+python train_concap.py --config config/pretrain_concap_devlbert.yml --region_mask_prob 0.15 --trainer.auto_select_gpus false --trainer.gpus 2 --train_batch_size 48 --output_dir $OUTPUT_ROOT_DIR/$EXP_NAME --vilbert --mini --exact_epochs 2
 ## Further 12 epochs of training, with region mask probability 0.3
-python train_concap.py --config config/pretrain_concap_devlbert.yml --region_mask_prob 0.3 --pt2_run --trainer.auto_select_gpus false --trainer.gpus 2 --train_batch_size 48 --output_dir $OUTPUT_ROOT_DIR$EXP_NAME --vilbert --mini --exact_epochs 2
+python train_concap.py --config config/pretrain_concap_devlbert.yml --region_mask_prob 0.3 --pt2_run --trainer.auto_select_gpus false --trainer.gpus 2 --train_batch_size 48 --output_dir $OUTPUT_ROOT_DIR/$EXP_NAME --vilbert --mini --exact_epochs 2
 
 
 

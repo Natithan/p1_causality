@@ -16,10 +16,13 @@ if hostname == 'sceps':  # GCP:
     MODEL_CKPT_DIR = f"{CORE_ROOT_DIR}/p1_causality/{CKPT_DIR_NAME}"
 elif hostname in ['arwen', 'frodo', 'gimli', 'rose', 'sauron']:  # LIIR-servers
     CORE_ROOT_DIR = "/cw/liir/NoCsBack/testliir/nathan"
-    DATA_ROOT_DIR = "/cw/working-gimli/nathan/features_CoCa_lmdb"
-    MODEL_CKPT_DIR = f"/cw/working-gimli/nathan/{CKPT_DIR_NAME}"
+    # BIGSTORAGE_ROOT_DIR="/cw/working-gimli/nathan"
+    BIGSTORAGE_ROOT_DIR="/cw/working-arwen/nathan"
+    print("="*50,"Using storage at arwen instead of gimli","="*50)
+    DATA_ROOT_DIR = f"{BIGSTORAGE_ROOT_DIR}/features_CoCa_lmdb"
+    MODEL_CKPT_DIR = f"{BIGSTORAGE_ROOT_DIR}/{CKPT_DIR_NAME}"
     HOST = 'LIIR'
-    FINETUNE_DATA_ROOT_DIR = "/cw/working-gimli/nathan/downstream_data"
+    FINETUNE_DATA_ROOT_DIR = f"{BIGSTORAGE_ROOT_DIR}/downstream_data"
 else:  # VSC
     print(hostname)
     CORE_ROOT_DIR = "/data/leuven/336/vsc33642/"

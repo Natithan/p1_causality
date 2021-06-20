@@ -13,10 +13,11 @@ from constants import FINETUNE_DATA_ROOT_DIR
 from devlbert.vilbert import VILBertForVLTasks
 
 os.environ['CUDA_VISIBLE_DEVICES'] = str(get_free_gpus()[0])
-# os.environ['CUDA_VISIBLE_DEVICES'] = "0"
+# os.environ['CUDA_VISIBLE_DEVICES'] = "3"
 # print("*"*100,f"MANUALLY SETTING CUDA_VISIBLE_DEVICES TO {os.environ['CUDA_VISIBLE_DEVICES']}","*"*100)
-from tensorboardX import SummaryWriter
+# from tensorboardX import SummaryWriter
 from tqdm import tqdm
+from pytorch_lightning.loggers.tensorboard import SummaryWriter
 from bisect import bisect
 import yaml
 from easydict import EasyDict as edict
@@ -120,7 +121,7 @@ def main():
         "--vilbert", action="store_true", help="whether to use vilbert"
     )
     parser.add_argument(
-        "--zero_shot", action="store_true", help="whether to use vilbert instead of devlbert"
+        "--zero_shot", action="store_true", help="Whether to use non-finetuned model"
     )
     parser.add_argument(
         "--split", default="", type=str, help="which split to use."
@@ -168,7 +169,11 @@ def main():
     else:
         timeStamp = args.from_pretrained
 
-    savePath = os.path.join(args.output_dir, timeStamp)
+    if not args.save_name:
+        savePath = os.path.join(args.output_dir, timeStamp)
+    else:
+        savePath = os.path.join(args.output_dir, args.save_name)
+
 
     config = BertConfig.from_json_file(args.config_file)
     bert_weight_name = json.load(open("config/" + "bert-base-uncased_weight_name.json", "r"))
@@ -254,7 +259,7 @@ def main():
         rank_matrix = np.ones((5000)) * 1000
         count = 0
 
-        for i, batch in enumerate(task_dataloader_val[task_id]):
+        for i, batch in tqdm(enumerate(task_dataloader_val[task_id])):
             if args.mini:
                 if i > 20:
                     break
@@ -297,8 +302,11 @@ def main():
 
                     medr = np.floor(np.median(rank_matrix_tmp) + 1)
                     meanr = np.mean(rank_matrix_tmp) + 1
-                    print("%d Final r1:%.3f, r5:%.3f, r10:%.3f, mder:%.3f, meanr:%.3f" % (
-                    count, r1, r5, r10, medr, meanr))
+                    # Nathan
+                    print_interval = 50
+                    if count % print_interval == 0:
+                        print("%d Final r1:%.3f, r5:%.3f, r10:%.3f, mder:%.3f, meanr:%.3f" % (
+                        count, r1, r5, r10, medr, meanr))
 
                     results.append(np.argsort(-score_matrix[caption_idx]).tolist()[:20])
             count += 1
