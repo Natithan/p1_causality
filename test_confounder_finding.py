@@ -1,21 +1,29 @@
-#region imports etc
+# region imports etc
 import warnings
 
 import jsonargparse
 from tqdm import tqdm
+from sklearn.manifold import TSNE
+from sklearn.decomposition import PCA
+import matplotlib.pyplot as plt
+
 warnings.simplefilter(action='ignore', category=FutureWarning)
 import os, glob
 from constants import DEVLBERT_ROOT_DIR, LMDB_PATHS, MTURK_DIR, ARWEN_LMDB_PATHS, PROJECT_ROOT_DIR
 # export PYTHONPATH=/cw/liir/NoCsBack/testliir/nathan/p1_causality/DeVLBert:$PYTHONPATH
 # os.environ['PYTHONPATH'] = f"{DEVLBERT_ROOT_DIR}:{os.environ['PYTHONPATH']}"
 
+import matplotlib as mpl
+
+mpl.rcParams['figure.dpi'] = 700
 import random
 from pathlib import Path
 import numpy as np
 from pretorch_util import get_really_free_gpus
+
 myrank = 0
 os.environ['CUDA_VISIBLE_DEVICES'] = ",".join([str(i) for i in get_really_free_gpus()][myrank])
-MASTER_PORT = f'{12355+ myrank}'
+MASTER_PORT = f'{12355 + myrank}'
 import torch
 import torch.nn.functional as F
 from pytorch_pretrained_bert import BertTokenizer
@@ -32,7 +40,8 @@ from devlbert.datasets import ConceptCapLoaderTrain
 from devlbert.devlbert import BertForMultiModalPreTraining, BertConfig
 from scipy.stats import hypergeom
 from time import time as t, sleep, strftime
-#endregion
+
+# endregion
 
 OG_DEVLBERT_PATH = Path(DEVLBERT_ROOT_DIR, "save/devlbert/pytorch_model_11.bin")
 MY_DEVLBERT_PATH = Path(
@@ -45,7 +54,7 @@ GROUND_TRUTH_PATH = Path(MTURK_DIR, 'output_mturk', 'pair_annotations_0.8_no_cfd
 # STATISTIC = 'mAP'
 # STATISTIC = 'avgAtt'
 
-PRETRAINED_PATH = TMP_DEVLBERT_PATH # MY_DEVLBERT_PATH OG_DEVLBERT_PATH TMP_DEVLBERT_PATH
+PRETRAINED_PATH = TMP_DEVLBERT_PATH  # MY_DEVLBERT_PATH OG_DEVLBERT_PATH TMP_DEVLBERT_PATH
 
 # DATASET = 'coca'
 # DATASET = 'flickr30k'
@@ -110,8 +119,8 @@ def add_program_argparse_args(parser):
     )
     return parser
 
-def main_single_process(rank, world_size, run_id):
 
+def main_single_process(rank, world_size, run_id):
     parser = jsonargparse.ArgumentParser()
     parser = add_program_argparse_args(parser)
     args = parser.parse_args()
@@ -170,6 +179,7 @@ def main_single_process(rank, world_size, run_id):
     sb = t()
     START_T = t()  # TODO only consider non-masked tokens in mAP count?
     attentionAndCount_for_classid = {}
+    projyAndCount_for_classid = {}
 
     # TEMP_LMDB_PATHS = [f"/cw/working-arwen/nathan/features_CoCa_lmdb/full_coca_36_{i}_of_4.lmdb" for i in range(4)]
 
@@ -237,8 +247,9 @@ def main_single_process(rank, world_size, run_id):
         # Reshape data for batch operation
         y = y.reshape(y.shape[0] * y.shape[1], -1)
         image_target = image_target.reshape(image_target.shape[0] * image_target.shape[1], -1)
-
-        attention = torch.mm(model.causal_v.Wy(y), model.causal_v.Wz(model.causal_v.dic_z.to(device)).t()) / (
+        projected_y = model.causal_v.Wy(y)
+        projected_z = model.causal_v.Wz(model.causal_v.dic_z.to(device))
+        attention = torch.mm(projected_y, projected_z.t()) / (
                 model.causal_v.embedding_size ** 0.5)
         attention = F.softmax(attention, 1)  # torch.Size([batch_size * nb_bbox, 1601])
         # batch_subsample
@@ -259,8 +270,17 @@ def main_single_process(rank, world_size, run_id):
         #                                                           zip(max_box_classes, max_attented_classes,
         #                                                               image_mask[b_idx]) if m != 0])
         # print("Forward",t() - s)
+        if args.statistic == 'tsne':
+            # show_TSNE(model.causal_v.dic_z,CLASSES)
+            projyAndCount_for_classid = {}
+            for clid, vector in zip(max_box_classes, projected_y):
+                if clid in projyAndCount_for_classid:
+                    projyAndCount_for_classid[clid] = {'count': projyAndCount_for_classid[clid]['count'] + 1,
+                                                       'sumvec': projyAndCount_for_classid[clid]['sumvec'] + vector}
+                else:
+                    projyAndCount_for_classid[clid] = {'count': 1, 'sumvec': vector}
 
-        if args.statistic == 'avgAtt':
+        elif args.statistic == 'avgAtt':
             for i, classid in enumerate(max_box_ids):
                 classid = int(classid)
                 att = attention[i].detach().cpu().numpy()
@@ -342,13 +362,16 @@ def main_single_process(rank, world_size, run_id):
                 # for k, v in times.items():
                 #     print((k, sum(v) / len(v)))
             sb = t()
+
+    if args.statistic == 'tsne':
+        py_ids,py_vecs = zip(*[(k,v['sumvec'] / v['count']) for k,v in projyAndCount_for_classid.items()])
+        show_TSNE(torch.stack(py_vecs), py_ids, projected_z, CLASSES)
     save_stuff(args, attentionAndCount_for_classid, batch_num, gt, mAP_per_class_dict, rank, run_id)
     if world_size > 1:
         cleanup()
 
 
-
-def save_stuff(args, attentionAndCount_for_classid, batch_num, gt, mAP_per_class_dict, rank, run_id,extra_name=''):
+def save_stuff(args, attentionAndCount_for_classid, batch_num, gt, mAP_per_class_dict, rank, run_id, extra_name=''):
     if args.statistic == 'avgAtt':
         arr = np.zeros((1601, 1601)) - 1
         for k, v in attentionAndCount_for_classid.items():
@@ -371,7 +394,8 @@ def save_stuff(args, attentionAndCount_for_classid, batch_num, gt, mAP_per_class
              in a.items()}).transpose()
         with pd.option_context("max_colwidth", 1000):
             print(out_df.to_latex(header=False, bold_rows=True))
-            print(out_df.to_latex(header=False, bold_rows=True),file=open(Path(args.out_dir,f'latex_top_avgAtt_{run_id}.txt'),'w'))
+            print(out_df.to_latex(header=False, bold_rows=True),
+                  file=open(Path(args.out_dir, f'latex_top_avgAtt_{run_id}.txt'), 'w'))
 
     else:
 
@@ -483,19 +507,19 @@ def main():
     # n_procs = len(get_free_gpus())
     n_procs = 1
     run_id = int(t())
-    main_single_process(rank=0,world_size=1,run_id=run_id)
+    main_single_process(rank=0, world_size=1, run_id=run_id)
     # mp.spawn(main_single_process,
     #          args=(n_procs, run_id),
     #          nprocs=n_procs,
     #          join=True)
     # if not AA:
     #     pass
-        # prestring = 'avgAtt_' if AA else 'mAP_comparison_'
-        # partial_files = glob.glob(f'{args.out_dir.as_posix()}/{prestring}{run_id}_*')
-        # assert len(partial_files) == n_procs
-        # dfs = [pd.read_csv(f) for f in partial_files]
-        # avg = pd.concat(dfs)[['mAP_devlbert', 'mAP_baseline', 'mAP_baseline_emp']].mean()
-        # avg.to_csv(Path(args.out_dir, f'mAP_comparison_full_{run_id}.csv'), header=False)
+    # prestring = 'avgAtt_' if AA else 'mAP_comparison_'
+    # partial_files = glob.glob(f'{args.out_dir.as_posix()}/{prestring}{run_id}_*')
+    # assert len(partial_files) == n_procs
+    # dfs = [pd.read_csv(f) for f in partial_files]
+    # avg = pd.concat(dfs)[['mAP_devlbert', 'mAP_baseline', 'mAP_baseline_emp']].mean()
+    # avg.to_csv(Path(args.out_dir, f'mAP_comparison_full_{run_id}.csv'), header=False)
 
 
 def setup(rank, world_size):
@@ -509,6 +533,51 @@ def setup(rank, world_size):
 
 def cleanup():
     dist.destroy_process_group()
+
+
+def reduce_dim(input_matrix, z_matrix,target_dim=2):
+    total_matrix = torch.cat((input_matrix, z_matrix),dim=0)
+    pca = PCA(50).fit_transform(total_matrix.cpu().detach())
+    tsne_pca = TSNE(n_components=target_dim).fit_transform(pca)
+    return tsne_pca[:len(input_matrix)],tsne_pca[len(input_matrix):]
+
+
+def show_TSNE(input_matrix, input_annotations, z_matrix, z_annotations):
+
+    input_reduced, z_reduced = reduce_dim(input_matrix, z_matrix,target_dim=2)
+    fig, ax = plt.subplots()
+    red = [255, 0, 0]
+    blue = [0, 0, 255]
+    green = [0, 255, 0]
+    C_z = np.array([blue if txt != 'butter knife' else red for txt in z_annotations])
+
+    C_input = np.array([green]*len(input_annotations))
+    ax.scatter(input_reduced[:,0], input_reduced[:,1],c=C_input / 255,s=.5)
+    ax.scatter(z_reduced[:,0], z_reduced[:,1],c=C_z / 255,s=.3)
+    for annotations, reduced in zip((input_annotations,z_annotations),(input_reduced,z_reduced)):
+        for i, txt in enumerate(annotations):
+            ann = ax.annotate(txt, (reduced[:,0][i], reduced[:,1][i]))
+            ann.set_fontsize(1)
+    plt.show()
+    print('plotted')
+
+    # my_scatter_plot(a, b, annotations)
+    # if exclude_background:
+    #     zipped = [(aa, bb, tt) for aa, bb, tt in zip(a, b, annotations) if tt != 'background']
+    #     unzipped = list(zip(*zipped))
+    #     my_scatter_plot(unzipped[0], unzipped[1], unzipped[2])
+
+
+def my_scatter_plot(a, b, annotations):
+    fig, ax = plt.subplots()
+    red = [255, 0, 0]
+    blue = [0, 0, 255]
+    C = np.array([blue if txt != 'butter knife' else red for txt in annotations])
+    ax.scatter(a, b,c=C / 255)
+    for i, txt in enumerate(annotations):
+        ann = ax.annotate(txt, (a[i], b[i]))
+        ann.set_fontsize(2)
+    plt.show()
 
 
 if __name__ == '__main__':
@@ -537,3 +606,4 @@ def tmpp():
         item['boxes'] = np.frombuffer(base64.b64decode(item['boxes']), dtype=np.float32).reshape(num_boxes, 4)
         item['cls_prob'] = np.frombuffer(base64.b64decode(item["cls_prob"]), dtype=np.float32).reshape(num_boxes, 1601)
         els.append(item)
+

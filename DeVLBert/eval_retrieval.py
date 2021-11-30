@@ -12,7 +12,10 @@ from util import myprint
 from constants import FINETUNE_DATA_ROOT_DIR
 from devlbert.vilbert import VILBertForVLTasks
 
-os.environ['CUDA_VISIBLE_DEVICES'] = str(get_free_gpus()[0])
+free_gpus = get_free_gpus()
+if len(free_gpus) == 0:
+    raise ValueError("No free gpus, set to not run then.")
+os.environ['CUDA_VISIBLE_DEVICES'] = str(free_gpus[0])
 # os.environ['CUDA_VISIBLE_DEVICES'] = "3"
 # print("*"*100,f"MANUALLY SETTING CUDA_VISIBLE_DEVICES TO {os.environ['CUDA_VISIBLE_DEVICES']}","*"*100)
 # from tensorboardX import SummaryWriter

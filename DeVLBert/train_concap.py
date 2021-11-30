@@ -18,6 +18,9 @@ import yaml
 from pretorch_util import get_free_gpus
 import jsonargparse
 
+print("="*100,"Manually setting os.environ['CUDA_VISIBLE_DEVICES'] to use non-free GPU during testing","="*100)
+os.environ['CUDA_VISIBLE_DEVICES'] = "0"
+
 if 'CUDA_VISIBLE_DEVICES' in os.environ:
     print(os.environ['CUDA_VISIBLE_DEVICES'])
 else:
@@ -35,6 +38,8 @@ from time import strftime
 from pathlib import Path
 import pytorch_lightning as pl
 from pytorch_lightning import Trainer
+from pytorch_lightning.loggers import WandbLogger
+
 from pytorch_lightning.callbacks import LearningRateMonitor
 import torch.multiprocessing as mp
 
@@ -59,6 +64,8 @@ logging.basicConfig(
     level=logging.INFO,
 )
 logger = logging.getLogger(__name__)
+
+wandb_logger = WandbLogger(project="sceps")
 
 last_checkpoint_time = t()
 MASTER_RANK = 0
@@ -247,7 +254,7 @@ def add_program_argparse_args(parser):
         "--gradient_accumulation_steps",
         type=int,
         default=1,
-        help="Number of updates steps to accumualte before performing a backward/update pass.",
+        help="Number of updates steps to accumulate before performing a backward/update pass.",
     )
     parser.add_argument(
         "--fp16",
@@ -874,7 +881,8 @@ def main_pl():
                                                 find_unused_parameters=False)] if args.trainer.tpu_cores is None else [],
                                             # from https://pytorch-lightning.readthedocs.io/en/latest/benchmarking/performance.html#when-using-ddp-set-find-unused-parameters-false
                                             callbacks=[lr_monitor, checkpoint_callback, progressbar_callback],
-                                            profiler='simple')
+                                            profiler='simple',
+                                            logger=wandb_logger)
 
     # Overriding DataConnector to start batch_idx at nonzero position after resuming mid-epoch checkpoint
     trainer.data_connector = MyDataConnector(trainer,exp_args=args)

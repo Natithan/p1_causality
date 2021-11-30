@@ -3,24 +3,21 @@
   <component name="WebServers">
     <option name="servers">
       <webServer id="005236af-25fd-4c9c-82f1-92c7d289133b" name="genius" url="http://login.hpc.kuleuven.be">
-        <fileTransfer rootFolder="/data/leuven/336/vsc33642" accessType="SFTP" host="login.hpc.kuleuven.be" port="22" sshConfigId="ecf27d3d-cdc1-4fea-ac8a-f988bb13b679" sshConfig="genius" keyPair="true">
+        <fileTransfer rootFolder="/data/leuven/336/vsc33642" accessType="SFTP" host="login.hpc.kuleuven.be" port="22" sshConfigId="7b0f3ee9-68ef-4693-bfe6-20c0e9e9f3c5" sshConfig="vsc33642@login.hpc.kuleuven.be:22 key" keyPair="true">
           <advancedOptions>
-            <advancedOptions dataProtectionLevel="Private" passiveMode="true" shareSSLContext="true" />
+            <advancedOptions dataProtectionLevel="Private" keepAliveTimeout="0" passiveMode="true" shareSSLContext="true" />
           </advancedOptions>
         </fileTransfer>
       </webServer>
-      <webServer id="2804dde5-08ed-489a-9c33-8ca88f1f124a" name="arwen (1)" url="http://bla">
-        <fileTransfer rootFolder="/cw/liir/NoCsBack/testliir/nathan/p1_causality" accessType="SFTP" host="arwen.cs.kuleuven.be" port="22" sshConfigId="2c72eed0-5def-4038-9eae-4c18affbc928" sshConfig="arwen" keyPair="true" />
-      </webServer>
       <webServer id="c1421b73-5a7c-4fa4-8bfd-4efb2686c6c2" name="2gcp" url="http://blabla">
-        <fileTransfer rootFolder="/home/sceps_gcp" accessType="SFTP" host="skeps.europe-west4-a.curious-sandbox-314109" port="22" sshConfigId="c24a5c30-da68-4a1a-9bf1-267097a0df7b" sshConfig="skeps" keyPair="true">
+        <fileTransfer rootFolder="/home/sceps_gcp" accessType="SFTP" sshConfigId="c24a5c30-da68-4a1a-9bf1-267097a0df7b" sshConfig="skeps">
           <advancedOptions>
             <advancedOptions dataProtectionLevel="Private" passiveMode="true" shareSSLContext="true" />
           </advancedOptions>
         </fileTransfer>
       </webServer>
       <webServer id="310740e4-4603-4064-a577-ca9b63922f52" name="gcp" url="http://blabla">
-        <fileTransfer rootFolder="/home/nathan_e_d_cornille_gmail_com" accessType="SFTP" host="sceps.europe-west4-a.glass-cycle-312016" port="22" sshConfigId="609140c6-bda2-409d-9ff4-78ae2a516d33" sshConfig="gcp" keyPair="true">
+        <fileTransfer rootFolder="/home/nathan_e_d_cornille_gmail_com" accessType="SFTP" sshConfigId="609140c6-bda2-409d-9ff4-78ae2a516d33" sshConfig="gcp">
           <advancedOptions>
             <advancedOptions dataProtectionLevel="Private" passiveMode="true" shareSSLContext="true" />
           </advancedOptions>
@@ -32,7 +29,6 @@
         <name>netapp_gcp_vsc</name>
         <servers>
           <name value="genius" />
-          <name value="arwen (1)" />
         </servers>
       </group>
     </groups>

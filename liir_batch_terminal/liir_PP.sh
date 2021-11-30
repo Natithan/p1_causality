@@ -29,7 +29,7 @@ else
   max_t=-1
 fi
 #PRETRAINED_CKPT_RUN_NAME=gimli_2
-for PRETRAINED_CKPT_RUN_NAME in gimli_2 v6 gimli_1 v4
+for PRETRAINED_CKPT_RUN_NAME in vilbert_copy # gimli_2 v6 gimli_1 v4
 do
   case $PRETRAINED_CKPT_RUN_NAME in
 
@@ -49,6 +49,10 @@ do
       CKPT_FILE="pytorch_model_11.bin"
       ;;
 
+    vilbert_copy)
+      CKPT_FILE="bert_base_6_layer_6_connect_freeze_0/pytorch_model_8.bin"
+      ;;
+
     *)
        echo "Unknown ckpt passed: $PRETRAINED_CKPT_RUN_NAME"; return 1 ;;
   esac
@@ -57,8 +61,20 @@ do
   finetuned_ckpt_dir=$FINETUNED_CKPT_ROOT_DIR/$PRETRAINED_CKPT_RUN_NAME
   CFG_NAME=bert_base_6layer_6conect
 
+  if [[ "$PRETRAINED_CKPT_RUN_NAME" == *"vilbert"* ]]; then
+    VILBERT=true
+  fi
+  if [ "$VILBERT" = true ]
+  then
+      echo 'vilbert was used'
+      vilbert_arg='--vilbert'
+  else
+      vilbert_arg=''
+  fi
 
-  echo "python $CODE_ROOT_DIR/test_confounder_finding.py --checkpoint $PRETRAINED_CKPT --out_dir $output_dir/mAP_output --max_t $max_t"
+
+  echo "python eval_retrieval.py --bert_model bert-base-uncased --from_pretrained $PRETRAINED_CKPT --config_file config/bert_base_6layer_6conect.json --tasks 3 --split test --batch_size 1 --zero_shot $mini_arg --output_dir $output_dir/ZSIR --save_name default $vilbert_arg"
+#  echo "python $CODE_ROOT_DIR/test_confounder_finding.py --checkpoint $PRETRAINED_CKPT --out_dir $output_dir/mAP_output --max_t $max_t"
 #  echo "python $CODE_ROOT_DIR/DeVLBert/eval_retrieval.py --bert_model bert-base-uncased --from_pretrained $PRETRAINED_CKPT --config_file config/bert_base_6layer_6conect.json --tasks 3 --split test --batch_size 1 --zero_shot $mini_arg --output_dir $output_dir/ZSIR --save_name default"
 
 #  # Finetuning on VQA

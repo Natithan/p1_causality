@@ -31,6 +31,20 @@
             </Attribute>
           </value>
         </entry>
+        <entry key="\PP_output\literal_copy\mAP_output\per_class_mAP_comparison_1623923336_18273_rank0.csv">
+          <value>
+            <Attribute>
+              <option name="separator" value="," />
+            </Attribute>
+          </value>
+        </entry>
+        <entry key="\PP_output\no_prior\mAP_output\avg_mAP_comparison_1624027180_90760_rank0.csv">
+          <value>
+            <Attribute>
+              <option name="separator" value="," />
+            </Attribute>
+          </value>
+        </entry>
         <entry key="\PP_output\v4\mAP_output\avg_mAP_comparison_1623692993_90760_rank0.csv">
           <value>
             <Attribute>
@@ -59,6 +73,34 @@
             </Attribute>
           </value>
         </entry>
+        <entry key="\PP_output\vilbert_2\mAP_output\avg_mAP_comparison_1624874472_90760_rank0.csv">
+          <value>
+            <Attribute>
+              <option name="separator" value="," />
+            </Attribute>
+          </value>
+        </entry>
+        <entry key="\PP_output\vilbert_3\mAP_output\avg_mAP_comparison_1624874501_90760_rank0.csv">
+          <value>
+            <Attribute>
+              <option name="separator" value="," />
+            </Attribute>
+          </value>
+        </entry>
+        <entry key="\PP_output\vilbert_4\mAP_output\avg_mAP_comparison_1625037098_90760_rank0.csv">
+          <value>
+            <Attribute>
+              <option name="separator" value="," />
+            </Attribute>
+          </value>
+        </entry>
+        <entry key="\PP_output\vilbert_5\mAP_output\avg_mAP_comparison_1625134073_90760_rank0.csv">
+          <value>
+            <Attribute>
+              <option name="separator" value="," />
+            </Attribute>
+          </value>
+        </entry>
         <entry key="\avgAtt_output\avgAtt_1618522221_506_rank0.csv">
           <value>
             <Attribute>
@@ -66,7 +108,42 @@
             </Attribute>
           </value>
         </entry>
+        <entry key="\mAP_output\mAP_comparison_1617476332_71_rank0.csv">
+          <value>
+            <Attribute>
+              <option name="separator" value="," />
+            </Attribute>
+          </value>
+        </entry>
         <entry key="\mturk_responses_clean.csv">
+          <value>
+            <Attribute>
+              <option name="separator" value="," />
+            </Attribute>
+          </value>
+        </entry>
+        <entry key="\paper_resources\mturk_responses_clean.csv">
+          <value>
+            <Attribute>
+              <option name="separator" value="," />
+            </Attribute>
+          </value>
+        </entry>
+        <entry key="\vqa_evalai_results.csv">
+          <value>
+            <Attribute>
+              <option name="separator" value="," />
+            </Attribute>
+          </value>
+        </entry>
+        <entry key="\z_reference\tmp\gimli_1\mAP_output\per_class_mAP_comparison_1623612689_10840_rank0full_coca_36_0_of_4.lmdb.csv">
+          <value>
+            <Attribute>
+              <option name="separator" value="," />
+            </Attribute>
+          </value>
+        </entry>
+        <entry key="\z_reference\tmp\v4\mAP_output\avg_mAP_comparison_1623662055_10658_rank0.csv">
           <value>
             <Attribute>
               <option name="separator" value="," />
@@ -88,6 +165,13 @@
           </value>
         </entry>
         <entry key="\z_reference\tmp\v4\mAP_output\avg_mAP_comparison_1623692993_10568_rank0.csv">
+          <value>
+            <Attribute>
+              <option name="separator" value="," />
+            </Attribute>
+          </value>
+        </entry>
+        <entry key="\z_reference\tmp\v4\mAP_output\per_class_mAP_comparison_1623692993_28232_rank0.csv">
           <value>
             <Attribute>
               <option name="separator" value="," />

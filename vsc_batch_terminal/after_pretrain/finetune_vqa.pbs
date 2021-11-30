@@ -13,6 +13,8 @@ conda activate devlbert
 MINI=false
 CFG_NAME=bert_base_6layer_6conect
 VILBERT=false
+LAST_CKPT=false
+#LAST_CKPT=true
 ONLY_EVAL=false
 
 #while [[ "$#" -gt 0 ]]; do
@@ -113,8 +115,24 @@ then
   # Finetuning on VQA
   python train_tasks.py --bert_model bert-base-uncased --from_pretrained $pretrained_ckpt --config_file config/${CFG_NAME}.json --learning_rate 4e-5 --num_workers 0 --tasks 0 --save_name $PRETRAINED_CKPT_RUN_NAME --use_ema --ema_decay_ratio 0.9999 --batch_size $batch_size --output_dir $finetuned_ckpt_dir $mini_arg --world_size "$world_size"
 fi
+
+if [ "$LAST_CKPT" = true ]
+then
+    FINETUNED_CKPT_PATH=$finetuned_ckpt_dir/VQA_${CFG_NAME}-$PRETRAINED_CKPT_RUN_NAME/pytorch_model_${FINETUNED_CKPT_EPOCH}_ema.bin
+    SAVE_NAME=default
+
+else
+    timestamp=$(date +%s.%N)
+    tmp_file=tmp_$timestamp
+    python3 ../get_best_val_run.py --run_name $PRETRAINED_CKPT_RUN_NAME --metric vqa --tmp_file $tmp_file
+    FINETUNED_CKPT_PATH=`head $tmp_file`
+    rm $tmp_file
+    SAVE_NAME=best_val
+fi
+echo $FINETUNED_CKPT_PATH
+1
 # Evaluating on VQA
-python eval_tasks.py --bert_model bert-base-uncased --from_pretrained  $finetuned_ckpt_dir/VQA_${CFG_NAME}-$PRETRAINED_CKPT_RUN_NAME/pytorch_model_${FINETUNED_CKPT_EPOCH}_ema.bin  --config_file config/bert_base_6layer_6conect.json --tasks 0 --split test --save_name default  $mini_arg --output_dir $output_dir/VQA $vilbert_arg
+python eval_tasks.py --bert_model bert-base-uncased --from_pretrained  "$FINETUNED_CKPT_PATH"  --config_file config/bert_base_6layer_6conect.json --tasks 0 --split test --save_name $SAVE_NAME  $mini_arg --output_dir $output_dir/VQA $vilbert_arg
 
 #PRETRAINED_CKPT_RUN_NAME=gimli_1
 #CFG_NAME=bert_base_6layer_6conect

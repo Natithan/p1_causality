@@ -26,7 +26,7 @@ else
   mini_prefix=''
 fi
 #PRETRAINED_CKPT_RUN_NAME=gimli_2
-for PRETRAINED_CKPT_RUN_NAME in no_prior # gimli_2 v6 gimli_1 v4 vilbert literal_copy no_prior dependent_prior
+for PRETRAINED_CKPT_RUN_NAME in vilbert_5 # gimli_2 v6 gimli_1 v4 v5 vilbert literal_copy vilbert_2 vilbert_3 vilbert_4 vilbert_5 no_prior dependent_prior
 do
   case $PRETRAINED_CKPT_RUN_NAME in
 
@@ -38,7 +38,7 @@ do
       CKPT_FILE="epoch=11-step=110924-0.3.ckpt"
       ;;
 
-    v4 | v5 | v6 | vilbert | no_prior | dependent_prior)
+    v4 | v5 | v6 | vilbert | no_prior | dependent_prior | vilbert_2 | vilbert_3 | vilbert_4 | vilbert_5)
       CKPT_FILE="epoch=11-step=68063-0.3.ckpt"
       ;;
 
@@ -50,7 +50,8 @@ do
        echo "Unknown ckpt passed: $PRETRAINED_CKPT_RUN_NAME"; return 1 ;;
   esac
   PRETRAINED_CKPT=$PRETRAINED_CKPT_ROOT_DIR/$PRETRAINED_CKPT_RUN_NAME/$CKPT_FILE
-  if [ "$PRETRAINED_CKPT_RUN_NAME" = vilbert ]
+#  if [ "$PRETRAINED_CKPT_RUN_NAME" = vilbert ]
+  if [[  "$PRETRAINED_CKPT_RUN_NAME" == *"vilbert"* ]]
   then
     echo "Setting vilbert to true"
     maybe_vilbert='--vilbert'
@@ -86,10 +87,10 @@ do
 #    qsub -l nodes=1:ppn=9:gpus=1:skylake,qos=debugging,walltime=00:10:00 -N "${mini_prefix}"finetune_vqa $PBS_SCRIPT_DIR/finetune_vqa.pbs -F "--pretrained_ckpt $PRETRAINED_CKPT --finetuned_ckpt_dir $FINETUNED_CKPT_ROOT_DIR/$PRETRAINED_CKPT_RUN_NAME --output_dir $OUTPUT_ROOT_DIR/$PRETRAINED_CKPT_RUN_NAME $mini_arg $maybe_vilbert"
 #    qsub -l nodes=1:ppn=9:gpus=1:skylake,qos=debugging,walltime=00:10:00 -N "${mini_prefix}"finetune_ir $PBS_SCRIPT_DIR/finetune_ir.pbs -F "--pretrained_ckpt $PRETRAINED_CKPT --finetuned_ckpt_dir $FINETUNED_CKPT_ROOT_DIR/$PRETRAINED_CKPT_RUN_NAME --output_dir $OUTPUT_ROOT_DIR/$PRETRAINED_CKPT_RUN_NAME $mini_arg $maybe_vilbert"
   fi
-#  qsub -l ${QSUB_L_ARGS_MAP} -N "${mini_prefix}"mAP_"${PRETRAINED_CKPT_RUN_NAME}" $PBS_SCRIPT_DIR/mAP.pbs -F "--pretrained_ckpt $PRETRAINED_CKPT --output_dir $OUTPUT_ROOT_DIR/$PRETRAINED_CKPT_RUN_NAME $mini_arg"
-#  qsub -l ${QSUB_L_ARGS_AA} -N "${mini_prefix}"avgAtt_"${PRETRAINED_CKPT_RUN_NAME}" $PBS_SCRIPT_DIR/avgAtt.pbs -F "--pretrained_ckpt $PRETRAINED_CKPT --output_dir $OUTPUT_ROOT_DIR/$PRETRAINED_CKPT_RUN_NAME $mini_arg"
-#  qsub -l ${QSUB_L_ARGS_ZSIR} -N "${mini_prefix}"zsir_"${PRETRAINED_CKPT_RUN_NAME}" $PBS_SCRIPT_DIR/zsir.pbs -F "--pretrained_ckpt $PRETRAINED_CKPT --output_dir $OUTPUT_ROOT_DIR/$PRETRAINED_CKPT_RUN_NAME $mini_arg $maybe_vilbert"
-#  qsub -l ${QSUB_L_ARGS_VQA} -N "${mini_prefix}"vqa_"${PRETRAINED_CKPT_RUN_NAME}" $PBS_SCRIPT_DIR/finetune_vqa.pbs -F "--pretrained_ckpt $PRETRAINED_CKPT --finetuned_ckpt_dir $FINETUNED_CKPT_ROOT_DIR/$PRETRAINED_CKPT_RUN_NAME --output_dir $OUTPUT_ROOT_DIR/$PRETRAINED_CKPT_RUN_NAME $mini_arg --world_size $finetune_world_size $maybe_vilbert"
+  qsub -l ${QSUB_L_ARGS_MAP} -N "${mini_prefix}"mAP_"${PRETRAINED_CKPT_RUN_NAME}" $PBS_SCRIPT_DIR/mAP.pbs -F "--pretrained_ckpt $PRETRAINED_CKPT --output_dir $OUTPUT_ROOT_DIR/$PRETRAINED_CKPT_RUN_NAME $mini_arg"
+  qsub -l ${QSUB_L_ARGS_AA} -N "${mini_prefix}"avgAtt_"${PRETRAINED_CKPT_RUN_NAME}" $PBS_SCRIPT_DIR/avgAtt.pbs -F "--pretrained_ckpt $PRETRAINED_CKPT --output_dir $OUTPUT_ROOT_DIR/$PRETRAINED_CKPT_RUN_NAME $mini_arg"
+  qsub -l ${QSUB_L_ARGS_ZSIR} -N "${mini_prefix}"zsir_"${PRETRAINED_CKPT_RUN_NAME}" $PBS_SCRIPT_DIR/zsir.pbs -F "--pretrained_ckpt $PRETRAINED_CKPT --output_dir $OUTPUT_ROOT_DIR/$PRETRAINED_CKPT_RUN_NAME $mini_arg $maybe_vilbert"
+  qsub -l ${QSUB_L_ARGS_VQA} -N "${mini_prefix}"vqa_"${PRETRAINED_CKPT_RUN_NAME}" $PBS_SCRIPT_DIR/finetune_vqa.pbs -F "--pretrained_ckpt $PRETRAINED_CKPT --finetuned_ckpt_dir $FINETUNED_CKPT_ROOT_DIR/$PRETRAINED_CKPT_RUN_NAME --output_dir $OUTPUT_ROOT_DIR/$PRETRAINED_CKPT_RUN_NAME $mini_arg --world_size $finetune_world_size $maybe_vilbert"
   qsub -l ${QSUB_L_ARGS_IR} -N "${mini_prefix}"ir_"${PRETRAINED_CKPT_RUN_NAME}" $PBS_SCRIPT_DIR/finetune_ir.pbs -F "--pretrained_ckpt $PRETRAINED_CKPT --finetuned_ckpt_dir $FINETUNED_CKPT_ROOT_DIR/$PRETRAINED_CKPT_RUN_NAME --output_dir $OUTPUT_ROOT_DIR/$PRETRAINED_CKPT_RUN_NAME $mini_arg --world_size $finetune_world_size $maybe_vilbert"
 #  qsub -l ${QSUB_L_ARGS_VQA_EVAL} -N "${mini_prefix}"vqa_eval_"${PRETRAINED_CKPT_RUN_NAME}" $PBS_SCRIPT_DIR/finetune_vqa.pbs -F "--pretrained_ckpt $PRETRAINED_CKPT --finetuned_ckpt_dir $FINETUNED_CKPT_ROOT_DIR/$PRETRAINED_CKPT_RUN_NAME --output_dir $OUTPUT_ROOT_DIR/$PRETRAINED_CKPT_RUN_NAME --world_size $eval_world_size --only_eval $mini_arg $maybe_vilbert"
 #  qsub -l ${QSUB_L_ARGS_IR_EVAL} -N "${mini_prefix}"ir_eval_"${PRETRAINED_CKPT_RUN_NAME}" $PBS_SCRIPT_DIR/finetune_ir.pbs -F "--pretrained_ckpt $PRETRAINED_CKPT --finetuned_ckpt_dir $FINETUNED_CKPT_ROOT_DIR/$PRETRAINED_CKPT_RUN_NAME --output_dir $OUTPUT_ROOT_DIR/$PRETRAINED_CKPT_RUN_NAME $mini_arg --world_size $eval_world_size $maybe_vilbert --only_eval"

@@ -543,7 +543,6 @@ def result_dict(joint_count, marginal_count, noun_for_id, s, img_id_for_idx_pair
     return w
 
 
-# TODO make sure this runs in reasonable time for big data
 def read_and_count(ds):
     img_joint_count = np.zeros((NB_IMG_CLASSES, NB_IMG_CLASSES))
     # nlp = spacy.load('en_core_web_sm')

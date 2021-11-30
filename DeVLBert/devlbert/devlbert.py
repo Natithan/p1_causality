@@ -1341,7 +1341,7 @@ class BertPreTrainedModel(nn.Module):
                                "cls.causal_predictor_v2t.*",
                                "cls.bi_seq_relationship.*",
                                "cls.imagePredictions.*",
-                               "causal_*",
+                               "causal_.*",
                                # For loading concap-pretrained for ir-task-training
                                "vil_prediction.*",
                                "vil_logit.*",
@@ -1365,14 +1365,15 @@ class BertPreTrainedModel(nn.Module):
                                 'cls.seq_relationship.weight',
                                 'cls.seq_relationship.bias',
                                # For loading concap-pretrained for ir-task-training
-                               "causal_*",
+                               "causal_.*",
+                               "id2class_vector", # For dependent_prior
 
             ]
             # assert all([uk in allowed_unexpected for uk in
             #             unexpected_keys]), "Some unallowed unexpected keys in pretrained model"  # Nathan
-
             assert all([any([bool(re.match(au, uk)) for au in allowed_unexpected]) for uk in
-                        unexpected_keys]), "Some unallowed keys missing from pretrained model"
+                        unexpected_keys]), f"Some unallowed unexpected keys in pretrained model: " \
+                                           f"{[uk for uk in unexpected_keys if not any([bool(re.match(au, uk)) for au in allowed_unexpected])]}"
         if len(error_msgs) > 0 and default_gpu:
             raise RuntimeError(
                 "Error(s) in loading state_dict for {}:\n\t{}".format(

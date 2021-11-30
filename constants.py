@@ -23,13 +23,18 @@ elif hostname in ['arwen', 'frodo', 'gimli', 'rose', 'sauron']:  # LIIR-servers
     MODEL_CKPT_DIR = f"{BIGSTORAGE_ROOT_DIR}/{CKPT_DIR_NAME}"
     HOST = 'LIIR'
     FINETUNE_DATA_ROOT_DIR = f"{BIGSTORAGE_ROOT_DIR}/downstream_data"
+elif hostname == 'DESKTOP-2HMIDLO': # local PC
+    CORE_ROOT_DIR = "/mnt/c/Users/natha/PycharmProjects"
+    BIGSTORAGE_ROOT_DIR = CORE_ROOT_DIR
+    DATA_ROOT_DIR = f"{BIGSTORAGE_ROOT_DIR}/features_CoCa_lmdb"
 else:  # VSC
     print(hostname)
+    BIGSTORAGE_ROOT_DIR = "/scratch/leuven/336/vsc33642"
     CORE_ROOT_DIR = "/data/leuven/336/vsc33642/"
-    DATA_ROOT_DIR = "/scratch/leuven/336/vsc33642/features_CoCa_lmdb"
-    MODEL_CKPT_DIR = f"/scratch/leuven/336/vsc33642/{CKPT_DIR_NAME}"
+    DATA_ROOT_DIR = f"{BIGSTORAGE_ROOT_DIR}/features_CoCa_lmdb"
+    MODEL_CKPT_DIR = f"{BIGSTORAGE_ROOT_DIR}/{CKPT_DIR_NAME}"
     HOST = 'VSC'
-    FINETUNE_DATA_ROOT_DIR = "/scratch/leuven/336/vsc33642/downstream_datasets"
+    FINETUNE_DATA_ROOT_DIR = f"{BIGSTORAGE_ROOT_DIR}/downstream_datasets"
 
 PROJECT_ROOT_DIR = Path(CORE_ROOT_DIR, "p1_causality")
 DEVLBERT_ROOT_DIR = Path(PROJECT_ROOT_DIR, "DeVLBert")
