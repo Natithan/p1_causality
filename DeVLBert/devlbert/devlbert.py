@@ -47,7 +47,7 @@ from .myplmodule import PLBertForMultimodalPretraining
 from .task_utils import compute_score_with_logits
 from .utils import cached_path
 import numpy as np
-
+BATCHIFY = True
 logger = logging.getLogger(__name__)
 
 PRETRAINED_MODEL_ARCHIVE_MAP = {
@@ -1566,23 +1566,63 @@ class Causal_v(nn.Module):
         nn.init.constant_(self.Wz.bias, 0)
 
     def forward(self, y,og_classes=None):
-        temp = []
-        # Class = torch.argmax(image_target, 2, keepdim=True)
-        # for boxes, cls in zip(y, Class):
-        for i,boxes in enumerate(y):
-            attention = torch.mm(self.Wy(boxes), self.Wz(self.dic_z).t()) / (self.embedding_size ** 0.5)
-            attention = F.softmax(attention, 1)  # torch.Size([box, 1601])
-            z_hat = attention.unsqueeze(2) * self.dic_z.unsqueeze(0)
-            # torch.Size([box, 1601, 2048])
-            # Nathan
-            z = apply_prior(self,i, og_classes, z_hat)
-            temp.append(z)
-        temp = torch.stack(temp, 0)
+
+        if not BATCHIFY:
+            temp = []
+            # Class = torch.argmax(image_target, 2, keepdim=True)
+            # for boxes, cls in zip(y, Class):
+            for i,boxes in enumerate(y):
+                attention = torch.mm(self.Wy(boxes), self.Wz(self.dic_z).t()) / (self.embedding_size ** 0.5)
+                attention = F.softmax(attention, 1)  # torch.Size([box, 1601])
+                z_hat = attention.unsqueeze(2) * self.dic_z.unsqueeze(0)
+                # torch.Size([box, 1601, 2048])
+                # Nathan
+                z = apply_prior(self,i, og_classes, z_hat)
+                temp.append(z)
+            temp = torch.stack(temp, 0)
+        else:
+            # Nathan: Alternative batchified way which should be equivalent but faster
+            b_attention = torch.matmul(self.Wy(y), self.Wz(self.dic_z).t()) / (self.embedding_size ** 0.5)
+            b_attention = F.softmax(b_attention, -1)  # [b_sz, region_count, class_count]
+            if (not self.args.dependent_prior) and (not self.args.no_prior):
+                b_priored_attention = b_attention * self.prior[None, None, :]
+            elif self.args.no_prior:
+                b_priored_attention = b_attention / self.prior.shape[
+                    0]  # This is equivalent with the non-batched no_prior implementation, but makes me wonder if I do unnecessary downscaling there.
+            elif self.args.dependent_prior:
+                # -1 indexes mean the token is not present in the pre-gathered prior (happens only for text modality).
+                # In that case, give a constant prior
+                b_sz = og_classes.shape[0]
+                region_count = og_classes.shape[1]
+                class_count = self.prior.shape[0]
+                b_adjusted_classes = torch.where(og_classes == -1, torch.ones_like(og_classes) * class_count,
+                                                 og_classes)  # [b_sz,region_count]
+                b_constant_prior = (torch.ones_like(self.prior) / len(self.prior)).unsqueeze(1)  # [class_count,1]
+                flattened_b_adjusted_classes = torch.reshape(b_adjusted_classes, (b_sz * region_count,))  # [b_sz*region_count]
+                flattened_b_dependent_prior_per_token = torch.cat((self.cond_prior, b_constant_prior),
+                                                                  dim=-1).index_select(1,
+                                                                                       flattened_b_adjusted_classes)  # [class_count,b_sz*region_count]
+                flattened_b_dependent_prior_per_token /= flattened_b_dependent_prior_per_token.sum(
+                    0)  # normalize so that for each token,  sum of weights is 1
+                b_dependent_prior_per_token = torch.reshape(flattened_b_dependent_prior_per_token, (
+                class_count, b_sz, region_count))  # [class_count,b_sz,region_count]
+                b_dependent_prior_per_token = b_dependent_prior_per_token.permute(1, 2,
+                                                                                  0)  # [b_sz,region_count,class_count]
+                b_priored_attention = b_attention * b_dependent_prior_per_token
+            b_temp = torch.matmul(b_priored_attention,
+                                  self.dic_z)  # [b_sz,region_count,emb_dim]
+            temp = b_temp
+            # b_attention = torch.matmul(self.Wy(y), self.Wz(self.dic_z).t()) / (self.embedding_size ** 0.5)
+            # b_attention = F.softmax(b_attention, -1)  # [batch_sz, box_cnt, 1601]
+            # b_priored_attention = b_attention * self.prior[None, None, :]
+            # temp = torch.matmul(b_priored_attention,
+            #                       self.dic_z)  # [batch_sz, box_cnt, 1601] x [1601, 768] --> [batch_sz, box_cnt, 768]
+
         return temp
 
 def apply_prior(module, i, og_classes, z_hat):
     if module.args is not None and module.args.no_prior:
-        z = torch.mean(z_hat, 1)
+        z = torch.mean(z_hat, 1) # z_hat: [#regions,1601,embedding_dim]. z: [#regions,embedding_dim]
     elif module.args is not None and module.args.dependent_prior:
         classes = og_classes[i]
         # -1 indexes mean the token is not present in the pre-gathered prior (happens only for text modality).
@@ -1623,15 +1663,57 @@ class Causal_t(nn.Module):
         # self.id2class = np.load("./dic/id2class.npy", allow_pickle=True).item()
 
     def forward(self, y,og_classes=None):
-        temp = []
-        for i, sentence in enumerate(y):
-            attention = torch.mm(self.Wy(sentence), self.Wz(self.dic_z).t()) / (self.embedding_size ** 0.5)
-            attention = F.softmax(attention, 1)  # torch.Size([box, 1601])
-            z_hat = attention.unsqueeze(2) * self.dic_z.unsqueeze(0)  # torch.Size([box, 1601, 2048])
-            # Nathan
-            z = apply_prior(self,i, og_classes, z_hat)
-            temp.append(z)
-        temp = torch.stack(temp, 0)
+        if not BATCHIFY:
+            temp = []
+            for i, sentence in enumerate(y):
+                attention = torch.mm(self.Wy(sentence), self.Wz(self.dic_z).t()) / (self.embedding_size ** 0.5)
+                attention = F.softmax(attention, 1)  # torch.Size([box, 1601])
+                z_hat = attention.unsqueeze(2) * self.dic_z.unsqueeze(0)  # torch.Size([box, 1601, 2048])
+                # Nathan
+                z = apply_prior(self,i, og_classes, z_hat)
+                temp.append(z)
+            temp = torch.stack(temp, 0)
+        else:
+
+            # Nathan: Alternative batchified way which should be equivalent but faster
+            b_attention = torch.matmul(self.Wy(y), self.Wz(self.dic_z).t()) / (self.embedding_size ** 0.5)
+            b_attention = F.softmax(b_attention, -1)  # [b_sz, region_count, class_count]
+            if (not self.args.dependent_prior) and (not self.args.no_prior):
+                b_priored_attention = b_attention * self.prior[None, None, :]
+            elif self.args.no_prior:
+                b_priored_attention = b_attention / self.prior.shape[
+                    0]  # This is equivalent with the non-batched no_prior implementation, but makes me wonder if I do unnecessary downscaling there.
+            elif self.args.dependent_prior:
+                # -1 indexes mean the token is not present in the pre-gathered prior (happens only for text modality).
+                # In that case, give a constant prior
+                b_sz = og_classes.shape[0]
+                region_count = og_classes.shape[1]
+                class_count = self.prior.shape[0]
+                b_adjusted_classes = torch.where(og_classes == -1, torch.ones_like(og_classes) * class_count,
+                                                 og_classes)  # [b_sz,region_count]
+                b_constant_prior = (torch.ones_like(self.prior) / len(self.prior)).unsqueeze(1)  # [class_count,1]
+                flattened_b_adjusted_classes = torch.reshape(b_adjusted_classes, (b_sz * region_count,))  # [b_sz*region_count]
+                flattened_b_dependent_prior_per_token = torch.cat((self.cond_prior, b_constant_prior),
+                                                                  dim=-1).index_select(1,
+                                                                                       flattened_b_adjusted_classes)  # [class_count,b_sz*region_count]
+                flattened_b_dependent_prior_per_token /= flattened_b_dependent_prior_per_token.sum(
+                    0)  # normalize so that for each token,  sum of weights is 1
+                b_dependent_prior_per_token = torch.reshape(flattened_b_dependent_prior_per_token, (
+                class_count, b_sz, region_count))  # [class_count,b_sz,region_count]
+                b_dependent_prior_per_token = b_dependent_prior_per_token.permute(1, 2,
+                                                                                  0)  # [b_sz,region_count,class_count]
+                b_priored_attention = b_attention * b_dependent_prior_per_token
+            b_temp = torch.matmul(b_priored_attention,
+                                  self.dic_z)  # [b_sz,region_count,emb_dim]
+            temp = b_temp
+
+            # # Nathan: Alternative batchified way which should be equivalent but faster
+            # b_attention = torch.matmul(self.Wy(y), self.Wz(self.dic_z).t()) / (self.embedding_size ** 0.5)
+            # b_attention = F.softmax(b_attention, -1)  # [batch_sz, box_cnt, 1601]
+            # b_priored_attention = b_attention * self.prior[None, None, :]
+            # temp = torch.matmul(b_priored_attention,
+            #                       self.dic_z)  # [batch_sz, box_cnt, 1601] x [1601, 768] --> [batch_sz, box_cnt, 768]
+
         return temp
 
 
@@ -1656,18 +1738,61 @@ class Causal_t2v(nn.Module):
         nn.init.constant_(self.Wz.bias, 0)
 
     def forward(self, y,og_classes=None):
-        temp = []
-        # Class = torch.argmax(image_target, 2, keepdim=True)
-        # for boxes, cls in zip(y, Class):
-        # for i, boxes in enumerate(y):# Nathan: they mixed up nomenclature
-        for i, sentence in enumerate(y):
-            attention = torch.mm(self.Wy(sentence), self.Wz(self.dic_z).t()) / (self.embedding_size ** 0.5)
-            attention = F.softmax(attention, 1)  # torch.Size([box, 1601])
-            z_hat = attention.unsqueeze(2) * self.t2v(self.dic_z).unsqueeze(0)  # torch.Size([box, 1601, 2048])
-            # Nathan
-            z = apply_prior(self,i, og_classes, z_hat)
-            temp.append(z)
-        temp = torch.stack(temp, 0)
+        if not BATCHIFY:
+            #Batch prior not implemented yet, keep old way
+            temp = []
+            # Class = torch.argmax(image_target, 2, keepdim=True)
+            # for boxes, cls in zip(y, Class):
+            # for i, boxes in enumerate(y):# Nathan: they mixed up nomenclature
+            for i, sentence in enumerate(y):
+                attention = torch.mm(self.Wy(sentence), self.Wz(self.dic_z).t()) / (self.embedding_size ** 0.5)
+                attention = F.softmax(attention, 1)  # torch.Size([box, 1601])
+                z_hat = attention.unsqueeze(2) * self.t2v(self.dic_z).unsqueeze(0)  # torch.Size([box, 1601, 2048])
+                # Nathan
+                z = apply_prior(self,i, og_classes, z_hat)
+                temp.append(z)
+            temp = torch.stack(temp, 0)
+        else:
+            # Nathan: Alternative batchified way which should be equivalent but faster
+            b_attention = torch.matmul(self.Wy(y), self.Wz(self.dic_z).t()) / (self.embedding_size ** 0.5)
+            b_attention = F.softmax(b_attention, -1)  # [b_sz, region_count, class_count]
+            if (not self.args.dependent_prior) and (not self.args.no_prior):
+                b_priored_attention = b_attention * self.prior[None, None, :]
+            elif self.args.no_prior:
+                b_priored_attention = b_attention / self.prior.shape[
+                    0]  # This is equivalent with the non-batched no_prior implementation, but makes me wonder if I do unnecessary downscaling there.
+            elif self.args.dependent_prior:
+                # -1 indexes mean the token is not present in the pre-gathered prior (happens only for text modality).
+                # In that case, give a constant prior
+                b_sz = og_classes.shape[0]
+                region_count = og_classes.shape[1]
+                img_class_count = self.prior.shape[0]
+                text_class_count = self.cond_prior.shape[-1]
+                b_adjusted_classes = torch.where(og_classes == -1, torch.ones_like(og_classes) * text_class_count,
+                                                 og_classes)  # [b_sz,region_count]
+                b_constant_prior = (torch.ones_like(self.prior) / len(self.prior)).unsqueeze(1)  # [img_class_count,1]
+                flattened_b_adjusted_classes = torch.reshape(b_adjusted_classes, (b_sz * region_count,))  # [b_sz*region_count]
+                flattened_b_dependent_prior_per_token = torch.cat((self.cond_prior, b_constant_prior),
+                                                                  dim=-1).index_select(1,
+                                                                                       flattened_b_adjusted_classes)  # [img_class_count,b_sz*region_count]
+                flattened_b_dependent_prior_per_token /= flattened_b_dependent_prior_per_token.sum(
+                    0)  # normalize so that for each token,  sum of weights is 1
+                b_dependent_prior_per_token = torch.reshape(flattened_b_dependent_prior_per_token, (
+                img_class_count, b_sz, region_count))  # [class_count,b_sz,region_count]
+                b_dependent_prior_per_token = b_dependent_prior_per_token.permute(1, 2,
+                                                                                  0)  # [b_sz,region_count,img_class_count]
+                b_priored_attention = b_attention * b_dependent_prior_per_token
+            b_temp = torch.matmul(b_priored_attention,
+                                  self.t2v(self.dic_z))  # [b_sz,region_count,emb_dim]
+            temp = b_temp
+
+            # # Nathan: Alternative batchified way which should be equivalent but faster
+            # b_attention = torch.matmul(self.Wy(y), self.Wz(self.dic_z).t()) / (self.embedding_size ** 0.5)
+            # b_attention = F.softmax(b_attention, -1)  # [batch_sz, box_cnt, 1601]
+            # b_priored_attention = b_attention * self.prior[None, None, :]
+            # temp = torch.matmul(b_priored_attention,
+            #                       self.t2v(self.dic_z))  # [batch_sz, box_cnt, 1601] x [1601, 768] --> [batch_sz, box_cnt, 768]
+
         return temp
 
 class Causal_v2t(nn.Module):
@@ -1692,17 +1817,57 @@ class Causal_v2t(nn.Module):
         # self.id2class = np.load("./dic/id2class.npy", allow_pickle=True).item()
 
     def forward(self, y,og_classes=None):
-        temp = []
-        # for i, sentence in enumerate(y):# Nathan: they mixed up nomenclature
-        # for sentence in y:
-        for i, boxes in enumerate(y):
-            attention = torch.mm(self.Wy(boxes), self.Wz(self.dic_z).t()) / (self.embedding_size ** 0.5)
-            attention = F.softmax(attention, 1)  # torch.Size([box, 1601])
-            z_hat = attention.unsqueeze(2) * self.v2t(self.dic_z).unsqueeze(0)  # torch.Size([box, 1601, 2048])
-            # Nathan
-            z = apply_prior(self,i, og_classes, z_hat)
-            temp.append(z)
-        temp = torch.stack(temp, 0)
+        if not BATCHIFY:
+            temp = []
+            # for i, sentence in enumerate(y):# Nathan: they mixed up nomenclature
+            # for sentence in y:
+            for i, boxes in enumerate(y):
+                attention = torch.mm(self.Wy(boxes), self.Wz(self.dic_z).t()) / (self.embedding_size ** 0.5)
+                attention = F.softmax(attention, 1)  # torch.Size([box, 1601])
+                z_hat = attention.unsqueeze(2) * self.v2t(self.dic_z).unsqueeze(0)  # torch.Size([box, 1601, 2048])
+                # Nathan
+                z = apply_prior(self,i, og_classes, z_hat)
+                temp.append(z)
+            temp = torch.stack(temp, 0)
+        else:
+            # Nathan: Alternative batchified way which should be equivalent but faster
+            b_attention = torch.matmul(self.Wy(y), self.Wz(self.dic_z).t()) / (self.embedding_size ** 0.5)
+            b_attention = F.softmax(b_attention, -1)  # [b_sz, region_count, class_count]
+            if (not self.args.dependent_prior) and (not self.args.no_prior):
+                b_priored_attention = b_attention * self.prior[None, None, :]
+            elif self.args.no_prior:
+                b_priored_attention = b_attention / self.prior.shape[
+                    0]  # This is equivalent with the non-batched no_prior implementation, but makes me wonder if I do unnecessary downscaling there.
+            elif self.args.dependent_prior:
+                # -1 indexes mean the token is not present in the pre-gathered prior (happens only for text modality).
+                # In that case, give a constant prior
+                b_sz = og_classes.shape[0]
+                region_count = og_classes.shape[1]
+                text_class_count = self.prior.shape[0]
+                img_class_count = self.cond_prior.shape[-1]
+                b_adjusted_classes = torch.where(og_classes == -1, torch.ones_like(og_classes) * img_class_count,
+                                                 og_classes)  # [b_sz,region_count]
+                b_constant_prior = (torch.ones_like(self.prior) / len(self.prior)).unsqueeze(1)  # [text_class_count,1]
+                flattened_b_adjusted_classes = torch.reshape(b_adjusted_classes, (b_sz * region_count,))  # [b_sz*region_count]
+                flattened_b_dependent_prior_per_token = torch.cat((self.cond_prior, b_constant_prior),
+                                                                  dim=-1).index_select(1,
+                                                                                       flattened_b_adjusted_classes)  # [text_class_count,b_sz*region_count]
+                flattened_b_dependent_prior_per_token /= flattened_b_dependent_prior_per_token.sum(
+                    0)  # normalize so that for each token,  sum of weights is 1
+                b_dependent_prior_per_token = torch.reshape(flattened_b_dependent_prior_per_token, (
+                text_class_count, b_sz, region_count))  # [text_class_count,b_sz,region_count]
+                b_dependent_prior_per_token = b_dependent_prior_per_token.permute(1, 2,
+                                                                                  0)  # [b_sz,region_count,class_count]
+                b_priored_attention = b_attention * b_dependent_prior_per_token
+            b_temp = torch.matmul(b_priored_attention,
+                                  self.v2t(self.dic_z))  # [b_sz,region_count,emb_dim]
+            temp = b_temp
+            # # Nathan: Alternative batchified way which should be equivalent but faster
+            # b_attention = torch.matmul(self.Wy(y), self.Wz(self.dic_z).t()) / (self.embedding_size ** 0.5)
+            # b_attention = F.softmax(b_attention, -1)  # [batch_sz, box_cnt, 1601]
+            # b_priored_attention = b_attention * self.prior[None, None, :]
+            # temp = torch.matmul(b_priored_attention,
+            #                       self.v2t(self.dic_z))  # [batch_sz, box_cnt, 1601] x [1601, 768] --> [batch_sz, box_cnt, 768]
         return temp
 
 

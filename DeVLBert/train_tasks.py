@@ -3,14 +3,15 @@ import argparse
 import datetime
 import json
 import logging
-
+import glob
 import os
 import yaml
-from constants import FINETUNE_DATA_ROOT_DIR
-from pretorch_util import get_free_gpus
-os.environ['CUDA_VISIBLE_DEVICES'] = ",".join([str(i) for i in get_free_gpus()])
-# os.environ['CUDA_VISIBLE_DEVICES'] = "1,3"
-# print(f"MANUALLY SETTING CUDA_VISIBLE_DEVICES TO {os.environ['CUDA_VISIBLE_DEVICES']}")
+import re
+from constants import FINETUNE_DATA_ROOT_DIR, MINI_FT_EPOCHS
+from pretorch_util import assign_visible_gpus
+assign_visible_gpus()
+from devlbert.myplmodule import get_core_module
+
 import warnings
 warnings.simplefilter(action='ignore', category=FutureWarning)
 warnings.simplefilter(action='ignore', category=UserWarning)
@@ -52,7 +53,8 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 #endregion
 from cfg_train_tasks import FGS
-
+OPTIMIZER_CKPT_PREFIX = "optimizer_state_"
+LR_SCHEDULER_CKPT_PREFIX = "lr_scheduler_state_"
 def main():
     #region parser stuff
     # parser = argparse.ArgumentParser()
@@ -208,8 +210,8 @@ def main_single_process(rank, args):
         # torch.distributed.init_process_group(backend="nccl")
 
     if args.mini:
-        print("Mini run: setting # train epochs to 2")
-        args.num_train_epochs = 2
+        print(f"Mini run: setting # train epochs to {MINI_FT_EPOCHS}")
+        args.num_train_epochs = MINI_FT_EPOCHS
     myprint("Entered single process")
     with open('devlbert_tasks.yml', 'r') as f:
         task_cfg = edict(yaml.load(f))
@@ -459,8 +461,34 @@ def main_single_process(rank, args):
     task_count = {name:0 for name in task_ids}
     s = None
     ETR = "?"
-    for epochId in range(args.num_train_epochs):
+
+    # Nathan: to resume by default from checkpoints present in the output_dir TODO this didn't work: the validation loss when resuming jumped a lot, so it seems it didn't resume correctly
+    start_epoch = 0
+    maybe_ema = "_ema" if args.use_ema else ""
+    path_search_string = os.path.join(savePath,f"pytorch_model_*{maybe_ema}.bin")
+    paths = glob.glob(path_search_string)
+    print(f"Paths found with existing checkpoints: {paths}")
+    # if len(paths) != 0:
+    #     latest_model_state_dict_file = max(paths, key=os.path.getctime)
+    #     print(f"Found existing checkpoint {latest_model_state_dict_file} in output_dir. Resuming from that checkpoint")
+    #     ckpt_epoch_number = int(re.match(".*pytorch_model_([0-9]+)_ema.bin",latest_model_state_dict_file).groups()[0])
+    #     start_epoch = 1 + ckpt_epoch_number
+    #     latest_optimizer_state_dict_file = os.path.join(savePath,f"{OPTIMIZER_CKPT_PREFIX}{ckpt_epoch_number}.bin")
+    #     latest_lr_scheduler_state_dict_file = os.path.join(savePath,f"{LR_SCHEDULER_CKPT_PREFIX}{ckpt_epoch_number}.bin")
+    #
+    #     ckpt_state_dict = torch.load(latest_model_state_dict_file,map_location=torch.device('cpu'))
+    #     optimizer_state_dict = torch.load(latest_optimizer_state_dict_file,map_location=torch.device('cpu'))
+    #     lr_scheduler_state_dict = torch.load(latest_lr_scheduler_state_dict_file,map_location=torch.device('cpu'))
+    #
+    #     core_module = get_core_module(model)
+    #     core_module.load_state_dict(ckpt_state_dict)
+    #     optimizer.load_state_dict(optimizer_state_dict)
+    #     lr_scheduler.load_state_dict(lr_scheduler_state_dict)
+
+    # for epochId in range(args.num_train_epochs):
+    for epochId in range(start_epoch,args.num_train_epochs):
         remaining_epochs = args.num_train_epochs - epochId
+        print(f"Remaining epochs: {remaining_epochs}")
         if s is not None:
             last_epoch_duration = time() - s
             ETR = str(datetime.timedelta(seconds=int(remaining_epochs * last_epoch_duration)))
@@ -476,7 +504,6 @@ def main_single_process(rank, args):
         
         # print("="*50,"SKIPPING TRAINING FOR DEBUGGING","="*50)
         # max_num_iter = 0
-
         iterator = range(max_num_iter)
         if default_gpu:
             iterator = tqdm(iterator, desc="Step", position=0)
@@ -531,6 +558,12 @@ def main_single_process(rank, args):
             except Exception:
                 pass
             torch.save(model_to_save.state_dict(), output_model_file)
+            # Nathan: also save optimizer state and lr_scheduler state
+            output_optimizer_file = os.path.join(savePath, OPTIMIZER_CKPT_PREFIX + str(epochId) + ".bin")
+            output_lr_scheduler_file = os.path.join(savePath, LR_SCHEDULER_CKPT_PREFIX + str(epochId) + ".bin")
+
+            torch.save(optimizer.state_dict(),output_optimizer_file)
+            torch.save(lr_scheduler.state_dict(), output_lr_scheduler_file)
             # If EMA is used, save averaged model
             if args.use_ema:
                 output_ema_state_dict = {}

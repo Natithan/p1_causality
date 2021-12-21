@@ -1,0 +1,44 @@
+#!/bin/bash
+
+#PBS -A lcalculus
+#PBS -l nodes=1:ppn=36:gpus=4:skylake
+#PBS -l partition=gpu
+#PBS -l walltime=168:00:00
+#PBS -l pmem=5gb
+#PBS -m abe
+#PBS -j oe
+#PBS -M nathan.cornille@kuleuven.be
+#PBS -N dep_prior_sk_b16g4a1
+batch_size=16
+gpus=4
+ga=1
+model=dep_prior
+index=1
+machine=sk
+
+name=${model}${index}_${machine}_b${batch_size}g${gpus}a${ga}
+source $HOME/.bashrc
+conda activate devlbert
+declare -a COMMON_VARS=('--config' 'config/pretrain_concap_devlbert.yml' '--trainer.auto_select_gpus' 'false' '--trainer.gpus' $gpus '--train_batch_size' $batch_size '--trainer.accumulate_grad_batches' $ga '--checkpoint_every_n_train_steps' 0 '--output_dir' "/scratch/leuven/336/vsc33642/${name}_checkpunten" "--run_name" "$name")
+
+case $model in
+
+  vi)
+    COMMON_VARS+=("--vilbert")
+    ;;
+
+  no_prior)
+    COMMON_VARS+=("--no_prior")
+    ;;
+
+  dep_prior)
+    COMMON_VARS+=("--dependent_prior")
+    ;;
+esac
+
+## First 12 epochs of training, with region mask probability 0.15
+python train_concap.py ${COMMON_VARS[@]} --region_mask_prob .15
+
+## Further 12 epochs of training, with region mask probability 0.3
+python train_concap.py ${COMMON_VARS[@]} --region_mask_prob .3 --pt2_run
+

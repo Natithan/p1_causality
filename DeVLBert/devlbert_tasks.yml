@@ -11,8 +11,8 @@ TASK0:
   val_annotations_jsonpath: ''
   max_seq_length: 16
   max_region_num: 100
-#  batch_size: 256
-  batch_size: 128
+  batch_size: 256
+#  batch_size: 128
 #  eval_batch_size: 1024
   eval_batch_size: 128
   train_split: trainval
@@ -67,8 +67,8 @@ TASK3:
   eval_val_annotations_jsonpath: __ROOT__/datasets/flickr30k/all_data_final_test_set0_2014.jsonline
   max_seq_length: 30
   max_region_num: 100
-#  batch_size: 64
-  batch_size: 32
+  batch_size: 64
+#  batch_size: 32
   train_split: train
   val_split: val
   lr: 0.00002

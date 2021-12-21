@@ -15,18 +15,13 @@ import os
 # from memory_profiler import profile
 
 import yaml
-from pretorch_util import get_free_gpus
+import sys
+from pretorch_util import assign_visible_gpus
 import jsonargparse
 
-print("="*100,"Manually setting os.environ['CUDA_VISIBLE_DEVICES'] to use non-free GPU during testing","="*100)
-os.environ['CUDA_VISIBLE_DEVICES'] = "0"
 
-if 'CUDA_VISIBLE_DEVICES' in os.environ:
-    print(os.environ['CUDA_VISIBLE_DEVICES'])
-else:
-    print("os.environ['CUDA_VISIBLE_DEVICES'] not set")
-    os.environ['CUDA_VISIBLE_DEVICES'] = ",".join([str(i) for i in get_free_gpus()])
-    print("Now set to", os.environ['CUDA_VISIBLE_DEVICES'])
+assign_visible_gpus()
+
 # from devlbert.datasets.concept_cap_dataset import get_core_ds
 from pytorch_lightning.plugins import DDPPlugin
 import argparse
@@ -65,14 +60,13 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-wandb_logger = WandbLogger(project="sceps")
-
 last_checkpoint_time = t()
 MASTER_RANK = 0
 
 
 # endregion
 
+# region Old non-pl mains
 def main():
     parser = argparse.ArgumentParser()
     parser = add_program_argparse_args(parser)
@@ -92,245 +86,6 @@ def main():
              args=(args, savePath),
              nprocs=args.world_size,
              join=True)
-
-
-def add_program_argparse_args(parser):
-    # Required parameters
-    parser.add_argument('--config', help="configuration file *.yml. Can be overriden with direct args",
-                        action=jsonargparse.ActionConfigFile)
-
-    parser.add_argument(
-        "--vilbert", action="store_true",
-        help="Whether to use vilbert instead of devlbert."
-    )
-    parser.add_argument(
-        "--no_prior", action="store_true",
-        help="Whether to skip weighting elements of the confounder dictionary by their prior frequency."
-    )
-    parser.add_argument(
-        "--dependent_prior", action="store_true",
-        help="Whether to weight elements of the confounder dictionary by a dependent prior, rather than "
-             "an independent one."
-    )
-    parser.add_argument(
-        "--empty_data", action="store_true",
-        help="Whether to use fake empty data (to quickly check between-epoch functionality)."
-    )
-    parser.add_argument(
-        "--train_file",
-        default="data/training",
-        # default="data/conceptual_caption/training",
-        type=str,
-        # required=True,
-        help="The input train corpus.",
-    )
-    parser.add_argument(
-        "--region_mask_prob",
-        default=0.15,
-        type=float,
-        help="Probability of masking a token during pretraining.",
-    )
-    parser.add_argument(
-        "--validation_file",
-        default="data/validation",
-        # default="data/conceptual_caption/validation",
-        type=str,
-        # required=True,
-        help="The input train corpus.",
-    )
-    parser.add_argument(
-        "--from_pretrained",
-        default="",
-        type=str,
-        help="Bert pre-trained model selected in the list: bert-base-uncased, "
-             "bert-large-uncased, bert-base-cased, bert-base-multilingual, bert-base-chinese.",
-    )
-    parser.add_argument(
-        "--bert_model",
-        default="bert-base-uncased",
-        type=str,
-        help="Bert pre-trained model selected in the list: bert-base-uncased, "
-             "bert-large-uncased, bert-base-cased, bert-base-multilingual, bert-base-chinese.",
-    )
-    parser.add_argument(
-        "--output_dir",
-        default=MODEL_CKPT_DIR,
-        type=str,
-        # required=True,
-        help="The output directory where the model checkpoints will be written.",
-    )
-    parser.add_argument(
-        "--config_file",
-        default="config/bert_config.json",
-        type=str,
-        # required=True,
-        help="The config file which specified the model details.",
-    )
-    ## Other parameters
-    parser.add_argument(
-        "--max_seq_length",
-        default=36,
-        type=int,
-        help="The maximum total input sequence length after WordPiece tokenization. \n"
-             "Sequences longer than this will be truncated, and sequences shorter \n"
-             "than this will be padded.",
-    )
-    parser.add_argument(
-        "--checkpoint_every_n_train_steps",
-        default=100,
-        type=int,
-        help="Number of training steps (batches) between each checkpoint. To deal with within-epoch crashes.",
-    )
-    parser.add_argument(
-        "--exact_epochs",
-        default=12,
-        type=int,
-        help="Number of training epochs.",
-    )
-    parser.add_argument("--predict_feature", action="store_true", help="visual target.")
-    parser.add_argument(
-        "--train_batch_size",
-        default=512,
-        type=int,
-        help="Total batch size for training.",
-    )
-    parser.add_argument(
-        "--learning_rate",
-        default=1e-4,
-        type=float,
-        help="The initial learning rate for Adam.",
-    )
-    parser.add_argument(
-        "--start_epoch",
-        default=0,
-        type=float,
-        help="Total number of training epochs to perform.",
-    )
-    parser.add_argument(
-        "--warmup_proportion",
-        default=0.1,
-        type=float,
-        help="Proportion of training to perform linear learning rate warmup for. "
-             "E.g., 0.1 = 10%% of training.",
-    )
-    parser.add_argument(
-        "--img_weight", default=1, type=float, help="weight for image loss"
-    )
-    parser.add_argument(
-        "--no_cuda", action="store_true", help="Whether not to use CUDA when available"
-    )
-    parser.add_argument(
-        "--on_memory",
-        action="store_true",
-        help="Whether to load train samples into memory or use disk",
-    )
-    parser.add_argument(
-        "--do_lower_case",
-        type=bool,
-        default=True,
-        help="Whether to lower case the input text. True for uncased models, False for cased models.",
-    )
-    parser.add_argument(
-        "--pt2_run",
-        action="store_true",
-        help="For the specific case of continuing pretraining with different mask rate to repro devlbert",
-    )
-
-    parser.add_argument(
-        "--mystepresume",
-        action="store_true",
-        help="For the specific case of continuing pretraining from a mid-epoch run based on the global step that is stored",
-    )
-    parser.add_argument(
-        "--local_rank",
-        type=int,
-        default=-1,
-        help="local_rank for distributed training on gpus",
-    )
-    parser.add_argument(
-        "--seed", type=int, default=42, help="random seed for initialization"
-    )
-    parser.add_argument(
-        "--gradient_accumulation_steps",
-        type=int,
-        default=1,
-        help="Number of updates steps to accumulate before performing a backward/update pass.",
-    )
-    parser.add_argument(
-        "--fp16",
-        action="store_true",
-        help="Whether to use 16-bit float precision instead of 32-bit",
-    )
-    parser.add_argument(
-        "--loss_scale",
-        type=float,
-        default=0,
-        help="Loss scaling to improve fp16 numeric stability. Only used when fp16 set to True.\n"
-             "0 (default value): dynamic loss scaling.\n"
-             "Positive power of 2: static loss scaling value.\n",
-    )
-    parser.add_argument(
-        "--num_workers",
-        type=int,
-        default=3,
-        help="Number of workers in the dataloader.",
-    )
-    # parser.add_argument(
-    #     "--world_size",
-    #     type=int,
-    #     default=2,
-    #     help="Number of processes, should equal number of GPUs you intend to use.",
-    # )
-    parser.add_argument(
-        "--save_name",
-        default='',
-        type=str,
-        help="save name for training.",
-    )
-    parser.add_argument(
-        "--baseline", action="store_true", help="Wheter to use the baseline model (single bert)."
-    )
-    parser.add_argument(
-        "--freeze", default=-1, type=int,
-        help="till which layer of textual stream of vilbert need to fixed."
-    )
-    parser.add_argument(
-        "--use_chuncks", default=0, type=float, help="whether use chunck for parallel training."
-    )
-    parser.add_argument(
-        "--distributed", action="store_true", help="whether use chunck for parallel training."
-    )
-    parser.add_argument(
-        "--without_coattention", action="store_true", help="whether pair loss."
-    )
-    parser.add_argument(
-        "--continue_training",
-        action="store_true",
-        help="if we need to continue a stopped pretraining procedure, add this"
-    )
-    parser.add_argument(
-        "--shuffle",
-        action="store_true",
-        help="Whether to shuffle the concap data"
-    )
-    # parser.add_argument(
-    #     "--gpus",
-    #     nargs='+', type=int,
-    #     help="which gpus to consider"
-    # )
-    parser.add_argument(
-        "--mini", action="store_true", help="Whether to train on mini data, just to test the whole training loop"
-    )
-    parser.add_argument(
-        "--checkpoint_period",
-        type=int,
-        default=60 * 60,
-        help="Number seconds between each time a checkpoint is stored",
-    )
-    parser.add_argument(
-        "--debug", action="store_true", help="If true sets logging level to debug"
-    )
-    return parser
 
 
 def main_single_process(rank, args, savePath):
@@ -698,6 +453,264 @@ def main_single_process(rank, args, savePath):
             # )
     cleanup()
 
+# endregion
+def add_program_argparse_args(parser):
+    # Required parameters
+    parser.add_argument('--config', help="configuration file *.yml. Can be overriden with direct args",
+                        action=jsonargparse.ActionConfigFile)
+
+    parser.add_argument(
+        "--vilbert", action="store_true",
+        help="Whether to use vilbert instead of devlbert."
+    )
+    parser.add_argument(
+        "--no_prior", action="store_true",
+        help="Whether to skip weighting elements of the confounder dictionary by their prior frequency."
+    )
+    parser.add_argument(
+        "--dependent_prior", action="store_true",
+        help="Whether to weight elements of the confounder dictionary by a dependent prior, rather than "
+             "an independent one."
+    )
+    parser.add_argument(
+        "--empty_data", action="store_true",
+        help="Whether to use fake empty data (to quickly check between-epoch functionality)."
+    )
+    parser.add_argument(
+        "--train_file",
+        default="data/training",
+        # default="data/conceptual_caption/training",
+        type=str,
+        # required=True,
+        help="The input train corpus.",
+    )
+    parser.add_argument(
+        "--run_name",
+        default=None,
+        type=str,
+        # required=True,
+        help="The run name as logged in wandb.",
+    )
+    parser.add_argument(
+        "--region_mask_prob",
+        default=0.15,
+        type=float,
+        help="Probability of masking a token during pretraining.",
+    )
+    parser.add_argument(
+        "--validation_file",
+        default="data/validation",
+        # default="data/conceptual_caption/validation",
+        type=str,
+        # required=True,
+        help="The input train corpus.",
+    )
+    parser.add_argument(
+        "--from_pretrained",
+        default="",
+        type=str,
+        help="Bert pre-trained model selected in the list: bert-base-uncased, "
+             "bert-large-uncased, bert-base-cased, bert-base-multilingual, bert-base-chinese.",
+    )
+    parser.add_argument(
+        "--bert_model",
+        default="bert-base-uncased",
+        type=str,
+        help="Bert pre-trained model selected in the list: bert-base-uncased, "
+             "bert-large-uncased, bert-base-cased, bert-base-multilingual, bert-base-chinese.",
+    )
+    parser.add_argument(
+        "--output_dir",
+        default=MODEL_CKPT_DIR,
+        type=str,
+        # required=True,
+        help="The output directory where the model checkpoints will be written.",
+    )
+    parser.add_argument(
+        "--config_file",
+        default="config/bert_config.json",
+        type=str,
+        # required=True,
+        help="The config file which specified the model details.",
+    )
+    ## Other parameters
+    parser.add_argument(
+        "--max_seq_length",
+        default=36,
+        type=int,
+        help="The maximum total input sequence length after WordPiece tokenization. \n"
+             "Sequences longer than this will be truncated, and sequences shorter \n"
+             "than this will be padded.",
+    )
+    parser.add_argument(
+        "--checkpoint_every_n_train_steps",
+        default=100,
+        type=int,
+        help="Number of training steps (batches) between each checkpoint. To deal with within-epoch crashes.",
+    )
+    parser.add_argument(
+        "--exact_epochs",
+        default=12,
+        type=int,
+        help="Number of training epochs.",
+    )
+    parser.add_argument("--predict_feature", action="store_true", help="visual target.")
+    parser.add_argument(
+        "--train_batch_size",
+        default=512,
+        type=int,
+        help="Total batch size for training.",
+    )
+    parser.add_argument(
+        "--learning_rate",
+        default=1e-4,
+        type=float,
+        help="The initial learning rate for Adam.",
+    )
+    parser.add_argument(
+        "--start_epoch",
+        default=0,
+        type=float,
+        help="Total number of training epochs to perform.",
+    )
+    parser.add_argument(
+        "--warmup_proportion",
+        default=0.1,
+        type=float,
+        help="Proportion of training to perform linear learning rate warmup for. "
+             "E.g., 0.1 = 10%% of training.",
+    )
+    parser.add_argument(
+        "--img_weight", default=1, type=float, help="weight for image loss"
+    )
+    parser.add_argument(
+        "--no_cuda", action="store_true", help="Whether not to use CUDA when available"
+    )
+    parser.add_argument(
+        "--on_memory",
+        action="store_true",
+        help="Whether to load train samples into memory or use disk",
+    )
+    parser.add_argument(
+        "--do_lower_case",
+        type=bool,
+        default=True,
+        help="Whether to lower case the input text. True for uncased models, False for cased models.",
+    )
+    parser.add_argument(
+        "--pt2_run",
+        action="store_true",
+        help="For the specific case of continuing pretraining with different mask rate to repro devlbert",
+    )
+
+    parser.add_argument(
+        "--mystepresume",
+        type=bool,
+        default=True,
+        help="For the specific case of continuing pretraining from a mid-epoch run based on the global step that is stored",
+    )
+    parser.add_argument(
+        "--local_rank",
+        type=int,
+        default=-1,
+        help="local_rank for distributed training on gpus",
+    )
+    parser.add_argument(
+        "--seed", type=int, default=42, help="random seed for initialization"
+    )
+    parser.add_argument(
+        "--gradient_accumulation_steps",
+        type=int,
+        default=1,
+        help="Number of updates steps to accumulate before performing a backward/update pass.",
+    )
+    parser.add_argument(
+        "--fp16",
+        action="store_true",
+        help="Whether to use 16-bit float precision instead of 32-bit",
+    )
+    parser.add_argument(
+        "--loss_scale",
+        type=float,
+        default=0,
+        help="Loss scaling to improve fp16 numeric stability. Only used when fp16 set to True.\n"
+             "0 (default value): dynamic loss scaling.\n"
+             "Positive power of 2: static loss scaling value.\n",
+    )
+    parser.add_argument(
+        "--num_workers",
+        type=int,
+        default=3,
+        help="Number of workers in the dataloader.",
+    )
+    # parser.add_argument(
+    #     "--world_size",
+    #     type=int,
+    #     default=2,
+    #     help="Number of processes, should equal number of GPUs you intend to use.",
+    # )
+    parser.add_argument(
+        "--save_name",
+        default='',
+        type=str,
+        help="save name for training.",
+    )
+    parser.add_argument(
+        "--baseline", action="store_true", help="Wheter to use the baseline model (single bert)."
+    )
+    parser.add_argument(
+        "--freeze", default=-1, type=int,
+        help="till which layer of textual stream of vilbert need to fixed."
+    )
+    parser.add_argument(
+        "--use_chuncks", default=0, type=float, help="whether use chunck for parallel training."
+    )
+    parser.add_argument(
+        "--distributed", action="store_true", help="whether use chunck for parallel training."
+    )
+    parser.add_argument(
+        "--without_coattention", action="store_true", help="whether pair loss."
+    )
+    parser.add_argument(
+        "--continue_training",
+        action="store_true",
+        help="if we need to continue a stopped pretraining procedure, add this"
+    )
+    parser.add_argument(
+        "--shuffle",
+        action="store_true",
+        help="Whether to shuffle the concap data"
+    )
+    # parser.add_argument(
+    #     "--gpus",
+    #     nargs='+', type=int,
+    #     help="which gpus to consider"
+    # )
+    parser.add_argument(
+        "--mini", action="store_true", help="Whether to train on mini data, just to test the whole training loop"
+    )
+    parser.add_argument(
+        "--dummy_model", action="store_true", help="Whether to use a mini, dummy model that doesn't "
+                                                   "take a lot of GPU space"
+    )
+    parser.add_argument(
+        "--checkpoint_period",
+        type=int,
+        default=60 * 60,
+        help="Number seconds between each time a checkpoint is stored",
+    )
+    parser.add_argument(
+        "--debug", action="store_true", help="If true sets logging level to debug"
+    )
+    parser.add_argument(
+        "--visible_gpus",
+        default=None,
+        type=str,
+        help="If set, overrides the default which shows GPUs on which no other people are running "
+             "(for setting when sharing GPUs with other people)",
+    )
+    return parser
+
 
 def add_jsonargparse_args(cls, parent_parser: jsonargparse.ArgumentParser) -> jsonargparse.ArgumentParser:
     r"""Extends existing argparse by default `Trainer` attributes.
@@ -788,6 +801,11 @@ def main_pl():
 
     parser.add_class_arguments(Trainer, 'trainer', as_group=True)
     args = parser.parse_args()
+
+    if args.run_name is not None:
+        wandb_logger = WandbLogger(project="sceps", name=args.run_name)
+    else:
+        wandb_logger = WandbLogger(project="sceps")
     if not args.vilbert:
         from devlbert.devlbert import BertForMultiModalPreTraining, BertConfig
     else:
@@ -816,7 +834,9 @@ def main_pl():
     if args.mystepresume:
         list_of_ckpt = glob.glob(f'{args.output_dir}/epoch=*.ckpt')  # * means all if need specific format then *.csv
         if len(list_of_ckpt) != 0:
+            # print(list_of_ckpt)
             latest_ckpt = max(list_of_ckpt, key=os.path.getctime)
+            # print(latest_ckpt)
             args.trainer.resume_from_checkpoint = latest_ckpt
     logger.info(yaml.dump(args))
 
@@ -866,7 +886,8 @@ def main_pl():
         else:
             PT1_REGION_MASK_PROB = 0.15
             list_of_pt1_ckpts = glob.glob(f'{args.output_dir}/epoch=*{PT1_REGION_MASK_PROB}.ckpt')
-            myprint(f"Loading pt1 checkpoint for pt2 from {f'{args.output_dir}/epoch=*{PT1_REGION_MASK_PROB}.ckpt'}")
+            print(list_of_pt1_ckpts)
+            myprint(f"Loading pt1 checkpoint from {f'{args.output_dir}/epoch=*{PT1_REGION_MASK_PROB}.ckpt'}")
             latest_pt1_ckpt = max(list_of_pt1_ckpts, key=os.path.getctime)
             model = BertForMultiModalPreTraining.load_from_checkpoint(latest_pt1_ckpt, config=config, args=args)
 
@@ -885,7 +906,7 @@ def main_pl():
                                             logger=wandb_logger)
 
     # Overriding DataConnector to start batch_idx at nonzero position after resuming mid-epoch checkpoint
-    trainer.data_connector = MyDataConnector(trainer,exp_args=args)
+    trainer.data_connector = MyDataConnector(trainer, exp_args=args)
     # init data flags
     trainer.data_connector.on_trainer_init(
         args.trainer.check_val_every_n_epoch, args.trainer.reload_dataloaders_every_epoch,
@@ -896,8 +917,64 @@ def main_pl():
     myprint(f'Getting to trainer.fit took {t() - first_start} seconds')
     # trainer.tune(model,train_dataloader=train_dataset)
     # trainer.fit(model, train_dataloader=train_dataset)
+
+    if args.dummy_model:
+        print("+"*100,"USING DUMMY MODEL","+"*100)
+        model = DummyModel(args)
+        trainer.callbacks = []
+        trainer.logger = None
+
     trainer.fit(model)
 
+
+class DummyModel(pl.LightningModule):
+    """BERT model with multi modal pre-training heads.
+    """
+
+    def __init__(self,args):
+        super().__init__()
+        self.linear = torch.nn.Linear(10,1)
+        self.automatic_optimization = True
+        self.args = args
+
+    def forward(self,image_feat):
+        pred = self.linear(image_feat[:,0,:10]).squeeze()
+        target = image_feat[:,0,11]
+        loss = torch.abs(pred-target).sum()
+        return loss
+
+    def training_step(self, batch, batch_idx):
+        input_ids, input_mask, segment_ids, lm_label_ids, is_next, image_feat, image_loc, image_target, image_label, image_mask, \
+        image_ids, causal_label_t, causal_label_v = (
+            batch
+        )
+        loss = self(image_feat)
+        return {'loss': loss}
+
+    def train_dataloader(self):
+        if (not hasattr(self,'train_dataset')) or self.train_dataset is None:
+            tokenizer = BertTokenizer.from_pretrained(
+                self.args.bert_model, do_lower_case=True
+            )
+            self.train_dataset = ConceptCapLoaderTrain(
+                tokenizer,
+                seq_len=self.args.max_seq_length,
+                batch_size=self.args.train_batch_size,
+                predict_feature=self.args.predict_feature,
+                num_workers=self.args.num_workers,
+                mini=self.args.mini,
+                shuffle=self.args.shuffle,
+                args=self.args
+            )
+
+            myprint("  Num examples =", self.train_dataset.num_dataset,
+                    "  Batch size =", self.args.train_batch_size,
+                    "  Num steps =", len(self.train_dataset))
+        return self.train_dataset
+
+    def configure_optimizers(self):
+        optimizer = torch.optim.Adam(self.parameters(), lr=1e-3)
+        return optimizer
 
 def training_step(args, batch, default_gpu, device, epochId, model, optimizer, rank, savePath, step, train_dataset,
                   viz):

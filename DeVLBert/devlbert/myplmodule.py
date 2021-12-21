@@ -73,7 +73,11 @@ class PLBertForMultimodalPretraining(pl.LightningModule):
 
         if 'args' in checkpoint:
             ckpt_args = checkpoint['args']
-            assert ckpt_args.train_batch_size == self.args.train_batch_size
+            effective_batch_size = self.args.train_batch_size * self.args.trainer.gpus * self.args.trainer.accumulate_grad_batches
+            ckpt_effective_batch_size = ckpt_args.train_batch_size * ckpt_args.trainer.gpus * ckpt_args.trainer.accumulate_grad_batches
+            print("EFFECTIVE:",self.args.train_batch_size,self.args.trainer.gpus,self.args.trainer.accumulate_grad_batches)
+            print("CKPT:",ckpt_args.train_batch_size,ckpt_args.trainer.gpus,ckpt_args.trainer.accumulate_grad_batches)
+            assert effective_batch_size == ckpt_effective_batch_size
         if self.args.checkpoint_every_n_train_steps > 0:
             if 'batch_idx' in checkpoint and (self.trainer is not None): # second predicate for the case where we load not to recover, but to continue pt2 from pt1
                 self.trainer.batch_idx = checkpoint['batch_idx']
@@ -210,6 +214,6 @@ class PLBertForMultimodalPretraining(pl.LightningModule):
 def get_core_module(module):
     from . import devlbert, vilbert
     core_module = module
-    while not (isinstance(core_module, devlbert.BertForMultiModalPreTraining) or isinstance(core_module, vilbert.BertForMultiModalPreTraining)):
+    while not (isinstance(core_module, devlbert.BertForMultiModalPreTraining) or isinstance(core_module, vilbert.BertForMultiModalPreTraining) or isinstance(core_module, devlbert.DeVLBertForVLTasks)):
         core_module = core_module.module
     return core_module

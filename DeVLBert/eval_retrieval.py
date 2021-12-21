@@ -7,16 +7,18 @@ import os
 import random
 from io import open
 import numpy as np
-from pretorch_util import get_free_gpus
+from pretorch_util import assign_visible_gpus
 from util import myprint
 from constants import FINETUNE_DATA_ROOT_DIR
 from devlbert.vilbert import VILBertForVLTasks
 
-free_gpus = get_free_gpus()
-if len(free_gpus) == 0:
-    raise ValueError("No free gpus, set to not run then.")
-os.environ['CUDA_VISIBLE_DEVICES'] = str(free_gpus[0])
-# os.environ['CUDA_VISIBLE_DEVICES'] = "3"
+assign_visible_gpus()
+
+# # free_gpus = get_free_gpus()
+# # if len(free_gpus) == 0:
+# #     raise ValueError("No free gpus, set to not run then.")
+# # os.environ['CUDA_VISIBLE_DEVICES'] = str(free_gpus[0])
+# os.environ['CUDA_VISIBLE_DEVICES'] = "1"
 # print("*"*100,f"MANUALLY SETTING CUDA_VISIBLE_DEVICES TO {os.environ['CUDA_VISIBLE_DEVICES']}","*"*100)
 # from tensorboardX import SummaryWriter
 from tqdm import tqdm
@@ -56,6 +58,13 @@ def main():
         type=str,
         help="Bert pre-trained model selected in the list: bert-base-uncased, "
              "bert-large-uncased, bert-base-cased, bert-base-multilingual, bert-base-chinese.",
+    )
+    parser.add_argument(
+        "--visible_gpus",
+        default=None,
+        type=str,
+        help="If set, overrides the default which shows GPUs on which no other people are running "
+             "(for setting when sharing GPUs with other people)",
     )
     parser.add_argument(
         "--from_pretrained",
@@ -153,6 +162,7 @@ def main():
     np.random.seed(args.seed)
     torch.manual_seed(args.seed)
 
+
     if args.baseline:
         from pytorch_pretrained_bert.modeling import BertConfig
     elif args.vilbert:
@@ -183,7 +193,8 @@ def main():
 
     if args.local_rank == -1 or args.no_cuda:
         device = torch.device("cuda" if torch.cuda.is_available() and not args.no_cuda else "cpu")
-        n_gpu = torch.cuda.device_count()
+        # n_gpu = torch.cuda.device_count() # Nathan: always evaluate on 1 GPU
+        n_gpu = 1
     else:
         torch.cuda.set_device(args.local_rank)
         device = torch.device("cuda", args.local_rank)
@@ -216,7 +227,7 @@ def main():
     #     num_labels = 3129 # Nathan for compatibility with Vilbert, whose pretrained model was in a situation where all tasks where trained at the same time)
 
     config.fast_mode = True
-    assert ('vilbert' in args.from_pretrained) == args.vilbert
+    assert ('vi' in args.from_pretrained) == args.vilbert
     if args.vilbert:
         if args.zero_shot:
             model = devlbert.vilbert.BertForMultiModalPreTraining.from_pretrained(args.from_pretrained, config)

@@ -1,0 +1,28 @@
+#!/bin/bash
+
+#PBS -A lcalculus
+#PBS -l nodes=1:ppn=32:gpus=8:cascadelake
+#PBS -l partition=gpu
+#PBS -l walltime=168:00:00
+#PBS -l pmem=5gb
+#PBS -m abe
+#PBS -j oe
+#PBS -M nathan.cornille@kuleuven.be
+#PBS -N dv3_ca_b8g8a1.pbs
+batch_size=8
+gpus=8
+ga=1
+machine=ca
+index=3
+
+name=dv${index}_${machine}_b${batch_size}g${gpus}a${ga}
+source $HOME/.bashrc
+conda activate devlbert
+declare -a COMMON_VARS=('--config' 'config/pretrain_concap_devlbert.yml' '--trainer.auto_select_gpus' 'false' '--trainer.gpus' $gpus '--train_batch_size' $batch_size '--trainer.accumulate_grad_batches' $ga '--checkpoint_every_n_train_steps' 0 '--output_dir' "/scratch/leuven/336/vsc33642/${name}_checkpunten" "--run_name" "$name")
+
+## First 12 epochs of training, with region mask probability 0.15
+python train_concap.py ${COMMON_VARS[@]} --region_mask_prob .15
+
+## Further 12 epochs of training, with region mask probability 0.3
+python train_concap.py ${COMMON_VARS[@]} --region_mask_prob .3 --pt2_run
+

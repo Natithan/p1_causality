@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <project version="4">
-  <component name="PublishConfigData" autoUpload="Always" serverName="testliir_via_sauron" exclude=".svn;.cvs;.idea;.DS_Store;.git;.hg;*.hprof;*.pyc;cooc_counts_*;Train_GCC-training.tsv;z_archive;caption_train.json" remoteFilesAllowedToDisappearOnAutoupload="false">
+  <component name="PublishConfigData" autoUpload="Always" serverName="netapp_gcp_vsc" exclude=".svn;.cvs;.idea;.DS_Store;.git;.hg;*.hprof;*.pyc;cooc_counts_*;Train_GCC-training.tsv;z_archive;caption_train.json" remoteFilesAllowedToDisappearOnAutoupload="false">
     <serverData>
       <paths name="2gcp">
         <serverdata>
@@ -42,6 +42,16 @@
           <mappings>
             <mapping local="$PROJECT_DIR$" web="/" />
           </mappings>
+        </serverdata>
+      </paths>
+      <paths name="Copy of project-level server 'testliir gimli'">
+        <serverdata>
+          <mappings>
+            <mapping deploy="/p1_causality" local="$PROJECT_DIR$" />
+          </mappings>
+          <excludedPaths>
+            <excludedPath path="/p1_causality/DeVLBert/tools/DownloadConcptualCaption/Train_GCC-training.tsv" />
+          </excludedPaths>
         </serverdata>
       </paths>
       <paths name="arwen (2)">
@@ -156,6 +166,13 @@
             <excludedPath path="/p1_causality/DeVLBert/tools/DownloadConcptualCaption/Validation_GCC-1.1.0-Validation.tsv" />
             <excludedPath path="/p1_causality/DeVLBert/tools/DownloadConcptualCaption/Train_GCC-training.tsv" />
           </excludedPaths>
+        </serverdata>
+      </paths>
+      <paths name="vsc33642@login.hpc.kuleuven.be:22 key">
+        <serverdata>
+          <mappings>
+            <mapping deploy="/" local="$PROJECT_DIR$" />
+          </mappings>
         </serverdata>
       </paths>
     </serverData>

@@ -10,6 +10,10 @@ import warnings
 
 warnings.simplefilter(action='ignore', category=FutureWarning)
 # from tensorboardX import SummaryWriter
+
+from pretorch_util import assign_visible_gpus
+assign_visible_gpus()
+
 from pytorch_lightning.loggers.tensorboard import SummaryWriter
 from tqdm import tqdm
 from bisect import bisect
@@ -53,6 +57,12 @@ def main():
         type=str,
         help="Bert pre-trained model selected in the list: bert-base-uncased, "
         "bert-large-uncased, bert-base-cased, bert-base-multilingual, bert-base-chinese.",
+    )
+    parser.add_argument(
+        "--visible_gpus",
+        default=None,
+        type=str,
+        help="If set, explicitly sets CUDA_VISIBLE_DEVICES",
     )
     parser.add_argument(
         "--output_dir",
@@ -202,7 +212,7 @@ def main():
     num_labels = max([dataset.num_labels for dataset in task_datasets_val.values()])
     # print([dataset.num_labels for dataset in task_datasets_val.values()], num_labels) #[3129] 3129
 
-    assert ('vilbert' in args.from_pretrained) == args.vilbert
+    assert ('vi' in args.from_pretrained) == args.vilbert
     if args.baseline:
         model = BaseBertForVLTasks.from_pretrained(
             args.from_pretrained, config, num_labels=num_labels, default_gpu=default_gpu

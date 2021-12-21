@@ -6,6 +6,7 @@ import socket
 CHECKPOINT_FREQUENCY = 1000
 hostname = socket.gethostname()
 CKPT_DIR_NAME = 'devlbert_checkpunten'
+VSC_BIGSTORAGE_ROOT_DIR = "/scratch/leuven/336/vsc33642"
 if hostname == 'sceps':  # GCP:
     CORE_ROOT_DIR = "/home/nathan_e_d_cornille_gmail_com"
     DATA_ROOT_DIR = "/mnt/disks/concap"  #
@@ -29,7 +30,7 @@ elif hostname == 'DESKTOP-2HMIDLO': # local PC
     DATA_ROOT_DIR = f"{BIGSTORAGE_ROOT_DIR}/features_CoCa_lmdb"
 else:  # VSC
     print(hostname)
-    BIGSTORAGE_ROOT_DIR = "/scratch/leuven/336/vsc33642"
+    BIGSTORAGE_ROOT_DIR = VSC_BIGSTORAGE_ROOT_DIR
     CORE_ROOT_DIR = "/data/leuven/336/vsc33642/"
     DATA_ROOT_DIR = f"{BIGSTORAGE_ROOT_DIR}/features_CoCa_lmdb"
     MODEL_CKPT_DIR = f"{BIGSTORAGE_ROOT_DIR}/{CKPT_DIR_NAME}"
@@ -52,7 +53,8 @@ CENTI_LMDB_PATHS = [f"{DATA_ROOT_DIR}/centi_coca_36_{i}_of_4.lmdb" for i in rang
 CAPTION_PATH = f"{DATA_ROOT_DIR}/caption_train.json"
 ID2CLASS_PATH = Path(DEVLBERT_ROOT_DIR, "dic", "id2class1141.npy")
 MTURK_DIR = Path(PROJECT_ROOT_DIR, "mturk")
-
+os.environ['TRANSFORMERS_CACHE'] = CORE_ROOT_DIR
+MINI_FT_EPOCHS=2
 
 def next_path(path_pattern):  # From https://stackoverflow.com/a/47087513/6297057
     """

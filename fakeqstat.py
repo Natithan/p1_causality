@@ -4,6 +4,8 @@ import os
 import sys
 import string
 import time
+import re
+import argparse
 
 f=os.popen('qstat --xml')
 dom=xml.dom.minidom.parse(f)
@@ -11,6 +13,17 @@ jobs=dom.getElementsByTagName('Job')
 from datetime import datetime
 
 def fakeqstat(joblist):
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--match_string",
+        default=None,
+        type=str,
+        # required=True,
+        help="String to filter on",
+    )
+    args = parser.parse_args()
+
     data = []
     cancelled_data = []
     for r in joblist:
@@ -26,6 +39,15 @@ def fakeqstat(joblist):
             ctime = datetime.fromtimestamp(int(ctime)).strftime('%b-%d %H:%M')
             jobtime='not set'
             ftime='not set'
+
+            with os.popen("/opt/moab/bin/showstart {jn}".format(jn = jobnum)) as g:
+                lines = g.readlines()
+            match = re.match('.* start in [^0-9-]+(-?[0-9]+.*)', lines[2])
+            if match is not None:
+                ETS = match.groups()[0]
+            else:
+                ETS = "None"
+
             if(jobstate=='R'):
                 jobtime=r.getElementsByTagName('start_time')[0].childNodes[0].data
                 jobtime = datetime.fromtimestamp(int(jobtime)).strftime('%b-%d %H:%M')
@@ -35,8 +57,8 @@ def fakeqstat(joblist):
             #     jobtime=r.getElementsByTagName('JAT_start_time')[0].childNodes[0].data
             # else:
             #     jobtime=r.getElementsByTagName('JB_submission_time')[0].childNodes[0].data
-            elements_str = ['Job_Id','Job_Name','s','Wall time end','start_run','start_queue','q']
-            elements = [jobnum,jobname,jobstate,ftime,jobtime,ctime,queue]
+            elements_str = ['Job_Id','Job_Name','s','to_end','started','queue since','q','Estimated Start Time']
+            elements = [jobnum,jobname,jobstate,ftime,jobtime,ctime,queue,ETS]
             if jobstate=='C':
                 cancelled_data.append(elements)
             else:
@@ -47,6 +69,9 @@ def fakeqstat(joblist):
             print(e)
     cancelled_data.reverse()
     data += cancelled_data
+    if args.match_string is not None:
+        print "Filtering on: ", args.match_string
+        data = [el for el in data if args.match_string in el[1]]
     widths = [max(map(len, col)) for col in zip(*data)]
     for i, row in enumerate(data):
         if i == 0:

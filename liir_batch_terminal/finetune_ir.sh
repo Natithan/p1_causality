@@ -2,7 +2,7 @@ source $HOME/.bashrc
 cd DeVLBert || exit
 if [ "$HOSTNAME" = gimli ];
 then
-  conda activate devlbert_torch181bash
+  conda activate devlbert_torch181
 else
   conda activate devlbert
 fi

@@ -1,0 +1,63 @@
+#!/bin/bash
+
+#PBS -A lcalculus
+#PBS -l nodes=1:ppn=9:gpus=1:skylake:default
+#PBS -l partition=gpu
+#PBS -l walltime=10:00
+#PBS -l pmem=5gb
+#PBS -l qos=debugging
+#PBS -m abe
+#PBS -j oe
+#PBS -M nathan.cornille@kuleuven.be
+#PBS -N sk_multiple_test.pbs
+OUTPUT_ROOT=/scratch/leuven/336/vsc33642
+CODE_ROOT_DIR=/data/leuven/336/vsc33642/p1_causality
+
+batch_size=2
+gpus=1
+ga=1
+machine=sk
+VISIBLE_GPUS='0'
+
+source $HOME/.bashrc
+cd $CODE_ROOT_DIR/DeVLBert
+conda activate devlbert
+
+declare -a COMMON_VARS=('--config' 'config/pretrain_concap_devlbert.yml' '--trainer.auto_select_gpus' 'false' '--trainer.gpus' $gpus '--train_batch_size' $batch_size '--trainer.accumulate_grad_batches' $ga '--checkpoint_every_n_train_steps' 0 "--visible_gpus ${VISIBLE_GPUS}" "--dummy_model" "--mini")
+
+index="_1"
+MODEL=dummy
+name=${MODEL}${index}_${machine}_b${batch_size}g${gpus}a${ga}
+OUTPUT_DIR="${OUTPUT_ROOT}/${name}_checkpunten"
+WANDB_RUN_NAME="$name"
+
+
+declare -a EXTRA_VARS_1=('--output_dir' $OUTPUT_DIR "--run_name" $WANDB_RUN_NAME)
+LOG_FILE_1="${name}.log"
+
+
+index="_3"
+MODEL=dummy
+name=${MODEL}${index}_${machine}_b${batch_size}g${gpus}a${ga}
+OUTPUT_DIR="${OUTPUT_ROOT}/${name}_checkpunten"
+WANDB_RUN_NAME="$name"
+
+
+declare -a EXTRA_VARS_2=('--output_dir' $OUTPUT_DIR "--run_name" $WANDB_RUN_NAME)
+LOG_FILE_2="${name}.log"
+
+index="_4"
+MODEL=dummy
+name=${MODEL}${index}_${machine}_b${batch_size}g${gpus}a${ga}
+OUTPUT_DIR="${OUTPUT_ROOT}/${name}_checkpunten"
+WANDB_RUN_NAME="$name"
+
+
+declare -a EXTRA_VARS_3=('--output_dir' $OUTPUT_DIR "--run_name" $WANDB_RUN_NAME)
+LOG_FILE_3="${name}.log"
+
+## First 12 epochs of training, with region mask probability 0.15
+## Further 12 epochs of training, with region mask probability 0.3
+{ python train_concap.py ${COMMON_VARS[@]} ${EXTRA_VARS_1[@]} --region_mask_prob .15 && python train_concap.py ${COMMON_VARS[@]} --region_mask_prob .3 --pt2_run; } > $LOG_FILE_1 2>&1 &
+{ python train_concap.py ${COMMON_VARS[@]} ${EXTRA_VARS_2[@]} --region_mask_prob .15 && python train_concap.py ${COMMON_VARS[@]} --region_mask_prob .3 --pt2_run; } > $LOG_FILE_2 2>&1 &
+{ python train_concap.py ${COMMON_VARS[@]} ${EXTRA_VARS_3[@]} --region_mask_prob .15 && python train_concap.py ${COMMON_VARS[@]} --region_mask_prob .3 --pt2_run; } > $LOG_FILE_3 2>&1 &

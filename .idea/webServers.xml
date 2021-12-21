@@ -5,9 +5,12 @@
       <webServer id="005236af-25fd-4c9c-82f1-92c7d289133b" name="genius" url="http://login.hpc.kuleuven.be">
         <fileTransfer rootFolder="/data/leuven/336/vsc33642" accessType="SFTP" host="login.hpc.kuleuven.be" port="22" sshConfigId="7b0f3ee9-68ef-4693-bfe6-20c0e9e9f3c5" sshConfig="vsc33642@login.hpc.kuleuven.be:22 key" keyPair="true">
           <advancedOptions>
-            <advancedOptions dataProtectionLevel="Private" keepAliveTimeout="0" passiveMode="true" shareSSLContext="true" />
+            <advancedOptions dataProtectionLevel="Private" passiveMode="true" shareSSLContext="true" />
           </advancedOptions>
         </fileTransfer>
+      </webServer>
+      <webServer id="c85fb9f9-949f-4c94-96a5-9f1d07b8d853" name="testliir gimli" url="http://gimli.cs.kuleuven.be">
+        <fileTransfer rootFolder="/cw/liir/NoCsBack/testliir/nathan" accessType="SFTP" host="gimli.cs.kuleuven.be" port="22" sshConfigId="8db292a4-c8cb-4b3b-99a2-de01cb9f509f" sshConfig="nathan@gimli.cs.kuleuven.be:22 key" keyPair="true" />
       </webServer>
       <webServer id="c1421b73-5a7c-4fa4-8bfd-4efb2686c6c2" name="2gcp" url="http://blabla">
         <fileTransfer rootFolder="/home/sceps_gcp" accessType="SFTP" sshConfigId="c24a5c30-da68-4a1a-9bf1-267097a0df7b" sshConfig="skeps">
@@ -29,6 +32,7 @@
         <name>netapp_gcp_vsc</name>
         <servers>
           <name value="genius" />
+          <name value="testliir gimli" />
         </servers>
       </group>
     </groups>

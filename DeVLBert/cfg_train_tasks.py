@@ -18,6 +18,7 @@ if os.path.basename(sys.argv[0]) in ('train_tasks.py','eval_tasks.py'):
     flags.DEFINE_string("tasks","","1-2-3... training task separate by -")
     flags.DEFINE_string("lr_scheduler","mannul","whether use learning rate scheduler.")
     flags.DEFINE_string("mode","","For compatibility with PyCharm python console")
+    flags.DEFINE_string("visible_gpus", None, "Override for cuda visible GPUs")
 
     flags.DEFINE_bool("mini", False, "")
     flags.DEFINE_bool("no_cuda", False, "Whether not to use CUDA when available")
