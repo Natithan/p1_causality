@@ -69,7 +69,7 @@ else
 fi
 #PRETRAINED_CKPT_RUN_NAME=gimli_2
 # gimli_2 v6 gimli_1 v4 v5 vilbert literal_copy vilbert_2 vilbert_3 vilbert_4 vilbert_5 no_prior dependent_prior
-for PRETRAINED_CKPT_RUN_NAME in v6 dv7 dependent_prior # vi_2 no_prior dep_prior # dv_1 dv_2 dv_3 dv_4 dv_5 vi_1 vi_2 vi_3 vi_4 vi_5 no_prior dep_prior
+for PRETRAINED_CKPT_RUN_NAME in dv8 # vi_2 no_prior dep_prior # dv_1 dv_2 dv_3 dv_4 dv_5 vi_1 vi_2 vi_3 vi_4 vi_5 no_prior dep_prior
 do
   if [[  "$PRETRAINED_CKPT_ROOT_DIR" == *"b64"* ]]; then
       CKPT_FILE=$(ls -t $PRETRAINED_CKPT_ROOT_DIR/$PRETRAINED_CKPT_RUN_NAME | head -1)
@@ -88,7 +88,7 @@ do
         CKPT_FILE="epoch=11-step=110924-0.3.ckpt"
         ;;
 
-      dv7 | v4 | v6 | vilbert )
+      dv8 | dv7 | v4 | v6 | vilbert )
         CKPT_FILE="epoch=11-step=68063-0.3.ckpt"
         ;;
 

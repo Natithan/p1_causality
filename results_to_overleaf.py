@@ -1,4 +1,4 @@
-import os, glob, io
+import os, glob, io, ast
 import seaborn as sns
 import re
 import pandas as pd
@@ -8,16 +8,18 @@ from matplotlib import colors
 from constants import PROJECT_ROOT_DIR
 from pathlib import Path
 import numpy as np
+import argparse
 
-PP_OUTPUT_DIR = f'{PROJECT_ROOT_DIR}/PP_output'
-dev_repro_runs = ('gimli_1', 'gimli_2', 'v4', 'v5', 'v6')
-dev_96_repro_runs = ('gimli_1', 'gimli_2')
-dev_128_repro_runs = ('v4', 'v5', 'v6')
+# PP_OUTPUT_DIR = f'{PROJECT_ROOT_DIR}/PP_output'
+PP_OUTPUT_DIR = f'{PROJECT_ROOT_DIR}/PP_bcorrect_output'
+# dev_repro_runs = ('gimli_1', 'gimli_2', 'v4', 'v5', 'v6')
+dev_repro_runs = ('dv7', 'dv8', 'v4', 'v5', 'v6')
+# dev_96_repro_runs = ('gimli_1', 'gimli_2')
+# dev_128_repro_runs = ('v4', 'v5', 'v6')
 vi_repro_runs = ('vilbert',) + tuple([f'vilbert_{i}' for i in range(2, 6)])
 literal_run = 'literal_copy'
 ALL_RUNS = dev_repro_runs + vi_repro_runs + ('literal_copy',) + (
-    'no_prior', 'dependent_prior', 'devlbert_reported', 'vilbert_reported', 'apr_gimli_1',
-    'apr_10eps_gimli_1')
+    'no_prior', 'dependent_prior', 'devlbert_reported', 'vilbert_reported') #, 'apr_gimli_1',    'apr_10eps_gimli_1')
 # versions = ['best_val','default']
 versions = ['best_val']
 # versions = ['default']
@@ -40,7 +42,7 @@ reduced_version = [versions[0]]
 REPORTED_COL_NAMES = [f'ir_{v} R@{num}' for v in reduced_version for num in [1, 5, 10]] + [f'zsir R@{num}' for num in
                                                                                            [1, 5, 10]] + [
                          'vqa_best_val test-std'] + [f'vqa_{v} test-dev' for v in reduced_version]
-
+NB_ATT_CLASSES = 10
 simple_summary_names = ["D", "V"]
 DS_row_rename_dict = {
     'average_repro': f'{DEVLBERT_LTX_NAME} repro (5 run avg)',
@@ -76,6 +78,7 @@ def get_path(run_name, type):
         'vqa_default': f'{PP_OUTPUT_DIR}/{run_name}/VQA/default/eval.txt',
         'vqa_best_val': f'{PP_OUTPUT_DIR}/{run_name}/VQA/best_val/eval.txt',
         'avgAtt': f'{PP_OUTPUT_DIR}/{run_name}/avgAtt_output/avgAtt_*_90760*.csv',
+        'qual_avgAtt': f'{PROJECT_ROOT_DIR}/qual_images/{run_name}/rows.csv',
     }
 
     files = glob.glob(d[type])
@@ -102,15 +105,22 @@ def path2df(run, result):
         # with open("/cw/liir/NoCsBack/testliir/nathan/p1_causality/PP_output/gimli_1/VQA/best_val/eval.txt", 'r') as f:
         #     text = f.readlines()[0]
         # df = pd.DataFrame([re.search('loss (.+?) score (.+?)', text).groups(1)], columns=['VQA Val Loss', 'VQA Score'])
+
         if 'best_val' in result:
-            name = f'{run} best_val'
+        #     name = f'{run} best_val'
+            name = f'{run} best_val bc'
+
+            # Typos when submitting to VQA eval server
+            if run == 'vilbert_5':
+                name = f'{run} best_eval bc'
         else:
             name = run
         vqa_row = VQA_RESULTS.loc[VQA_RESULTS['Method Name'] == name]
         # df = pd.DataFrame(pd.read_json(vqa_row['Result File'].iloc[0], typ='series')[0]).transpose().rename(
         #     columns={'overall': f'{result} test-dev'}, index={'test-dev': 0})
-        df = pd.DataFrame(pd.read_json(vqa_row['Result File'].iloc[0], typ='series')[0]).transpose().rename(
-            index={'test-dev': 0})
+        assert len(vqa_row) > 0, f"No VQA result for {name}"
+        vqa_result_series = pd.read_json(vqa_row['Result File'].iloc[0], typ='series') # iloc 0 picks the most recent results if multiple with same method name
+        df = pd.DataFrame(vqa_result_series[0]).transpose().rename(index={'test-dev': 0})
         df = df.rename(columns={'overall': 'test-dev'})
         df = df.rename(columns=lambda col_name: f'{result} {col_name}')
         # df = df.reset_index().rename(columns={'index': 'Run name'})
@@ -125,6 +135,24 @@ def path2df(run, result):
         c_df = pd.DataFrame(
             {effect: [score for score in causes] for effect, causes
              in a.items()}).transpose()
+        df.name = run
+        c_df.name = run
+        return (df, c_df)
+    elif result == 'qual_avgAtt':
+        full_df = pd.read_csv(path).drop(['Unnamed: 0'], axis=1)
+        effect_clss = list(full_df['Effect variable'])
+        img_files = list(full_df['img_file'])
+        # col_renamer = lambda col_idx: (effect_clss[col_idx],img_files[col_idx])
+        col_renamer = lambda col_idx: effect_clss[col_idx]
+        idx_renamer = lambda name_idx: f'Cause #{name_idx}'
+        # df = pd.DataFrame([full_df.apply(lambda row: f'{ast.literal_eval(row["Top cause variables"])[idx]}: {str(round(ast.literal_eval(row["Scores"])[idx], 3))}',axis=1) for idx in range(nb_causes)])\
+        #     .rename(columns=col_renamer,index=idx_renamer)
+        # c_df = pd.DataFrame([full_df.apply(lambda row: ast.literal_eval(row["Scores"])[idx],axis=1) for idx in range(nb_causes)])\
+        #     .rename(columns=col_renamer,index=idx_renamer)
+        df = pd.DataFrame([full_df.apply(lambda row: f'{ast.literal_eval(row["Top cause variables"])[idx]}: {str(round(ast.literal_eval(row["Scores"])[idx], 3))}',axis=1) for idx in range(NB_CAUSES)])\
+            .rename(columns=col_renamer)
+        c_df = pd.DataFrame([full_df.apply(lambda row: ast.literal_eval(row["Scores"])[idx],axis=1) for idx in range(NB_CAUSES)])\
+            .rename(columns=col_renamer)
         df.name = run
         c_df.name = run
         return (df, c_df)
@@ -166,6 +194,18 @@ def rename_col_for_latex(col):
 
 
 def b_g(target, source, cmap='PuBu', low=0, high=0):
+    '''
+    Returns array with background coloring
+    Args:
+        target:
+        source:
+        cmap:
+        low:
+        high:
+
+    Returns:
+
+    '''
     isCol = len(target.shape) < 2
     if isCol:
         a = source.loc[:, target.name].copy()
@@ -198,12 +238,21 @@ def b_g(target, source, cmap='PuBu', low=0, high=0):
 
 
 def main():
+    # region parser stuff
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--results', nargs='+', help='Which results for which to print out latex code', required=False, default=ALL_RESULTS)
+    parser.add_argument('--runs', nargs='+', help='Which runs for which to print out latex code', required=False, default=ALL_RUNS)
+    args = parser.parse_args()
+    # endregion
+
     mAP_scores = []
     baseline_scores = []
     frames = []
     avgAtt_dfs = []
     c_avgAtt_dfs = []
-    for run in ALL_RUNS:
+    qual_avgAtt_dfs = []
+    c_qual_avgAtt_dfs = []
+    for run in args.runs:
         columns = [pd.DataFrame([[run]], columns=['Run name'])]
         if run == 'devlbert_reported':
             columns += [pd.DataFrame([[61.6, 87.1, 92.6, 36.0, 67.1, 78.3, 71.1, 71.5]],
@@ -213,32 +262,38 @@ def main():
             columns += [pd.DataFrame([[58.2, 84.9, 91.5, 31.9, 61.1, 72.8, 70.6, 70.9]],
                                      columns=REPORTED_COL_NAMES)]
         else:
-            for result in ALL_RESULTS:
+            for result in args.results:
                 # if run == 'dependent_prior' and result in ('ir_best_val', 'ir_default'):
                 #     print(f"SKIPPING {run} - {result} FOR NOW AS NOT READY YET")
                 #     continue
-                if run == 'vilbert':
+                if 'vilbert' in run:
+                    msg = f"SKIPPING {run, result} AS NOT APPLICABLE FOR VILBERT"
                     if result == 'mAP':
-                        print(f"SKIPPING {run, result} FOR NOW AS NOT READY YET")
+                        print(msg)
                         columns.append(pd.DataFrame([["/", "/", "/", "/", "/"]],
                                                     columns=['mAP_devlbert', 'mAP_baseline', 'mAP_baseline_emp',
                                                              'batch_num', 'excess_mAP']))
                         continue
                     elif result == 'avgAtt':
-                        print(f"SKIPPING {run, result} FOR NOW AS NOT READY YET")
+                        print(msg)
                         continue
-                if run in ('apr_gimli_1', 'apr_10eps_gimli_1') and result != 'ir_best_val':
-                    print(f"SKIPPING {run, result} FOR NOW AS NOT READY YET")
-                    continue
+                # if run in ('apr_gimli_1', 'apr_10eps_gimli_1') and result != 'ir_best_val':
+                # if run in ('dv8') and result in ('mAP'):
+                #     print(f"SKIPPING {run, result} FOR NOW AS NOT READY YET")
+                #     continue
                 print(run, result)
                 res = path2df(run, result)
-                if not result == 'avgAtt':
-                    df = res
-                    columns.append(df)
-                else:
+                if result == 'avgAtt':
                     df, c_df = res
                     avgAtt_dfs.append(df)
                     c_avgAtt_dfs.append(c_df)
+                elif result == 'qual_avgAtt':
+                    df, c_df = res
+                    qual_avgAtt_dfs.append(df)
+                    c_qual_avgAtt_dfs.append(c_df)
+                else:
+                    df = res
+                    columns.append(df)
 
         new_frame = pd.concat(columns, axis=1)
         frames.append(new_frame)
@@ -247,10 +302,14 @@ def main():
     pd.set_option('display.max_columns', None)
     pd.set_option('display.width', None)
 
-    print_avgAtt(avgAtt_dfs, c_avgAtt_dfs)
+    if 'avgAtt' in args.results:
+        print_avgAtt(avgAtt_dfs, c_avgAtt_dfs)
+    if 'qual_avgAtt' in args.results:
+        print_qual_avgAtt(qual_avgAtt_dfs, c_qual_avgAtt_dfs)
     # print(multi_for_latex.to_latex(header=False, bold_rows=True,escape=False,column_format=f'p{{3cm}}l{"l"*NB_CAUSES}'))
 
-    for runs, name in zip([dev_repro_runs, vi_repro_runs, dev_96_repro_runs, dev_128_repro_runs], simple_summary_names + ["D96", "D128"]):
+    # for runs, name in zip([dev_repro_runs, vi_repro_runs, dev_96_repro_runs, dev_128_repro_runs], simple_summary_names + ["D96", "D128"]):
+    for runs, name in zip([dev_repro_runs, vi_repro_runs], simple_summary_names):
         relevant_slice = total_df.loc[total_df['Run name'].isin(runs)]
         average_repro_df = pd.concat([pd.DataFrame([[f"average_repro {name}"]], columns=['Run name']), pd.DataFrame(
             relevant_slice.mean()).transpose()], axis=1)
@@ -342,6 +401,67 @@ def main():
     #     (1,len(mAP_scores),len(mAP_scores)),
     #     ('/',mAP_stdev,baseline_stdev))),
     #     columns=("Type of run", "mAP score","# runs","standard deviation")).to_latex(index=False))
+
+
+def print_qual_avgAtt(qual_avgAtt_dfs, c_qual_avgAtt_dfs):
+    AA_runs = [BEST_REPRO_RUN, 'dependent_prior', 'no_prior', 'literal_copy']
+    multi = pd.concat({el.name: el.transpose() for el in qual_avgAtt_dfs}, axis=0)
+    multi_c = pd.concat({el.name: el.transpose() for el in c_qual_avgAtt_dfs}, axis=0)
+    multi_for_latex = multi.loc[multi.index.get_level_values(0).str.contains('|'.join(AA_runs))] \
+        .rename(DS_row_rename_dict)
+    c_multi_for_latex = multi_c.loc[multi_c.index.get_level_values(0).str.contains('|'.join(AA_runs))] \
+        .rename(DS_row_rename_dict)
+    og_string = str(multi_for_latex.style
+        .apply(
+        b_g, cmap=USED_CM,
+        source=c_multi_for_latex,
+        axis=None)
+        .format(precision=2)
+        .to_latex(
+        column_format=f'p{{3cm}}l{"l" * NB_CAUSES}',
+        convert_css=True,
+        multirow_align='c'))
+
+
+    buf = io.StringIO(og_string)
+    lines = buf.readlines()
+    newlines = []
+    for i,l in enumerate(lines):
+        if i == 1:
+            # Put instead of index line
+            l = "& Effect variable   & Top cause variables \\\\\n"
+        if 'multirow' in l or 'end{tabular}' in l:
+            newlines.append("\\hline\n")
+        newlines.append(l)
+
+    new_string = "".join(newlines)
+    new_string = new_string.replace("\multirow[c]{10}{*}", "\multirow[c]{10}{3cm}")
+    print(new_string)
+
+    # og_string = str(multi_for_latex.style
+    #     .apply(
+    #     b_g, cmap=USED_CM,
+    #     source=c_multi_for_latex,
+    #     axis=None)
+    #     .to_latex(
+    #     column_format=f'p{{3cm}}l{"l" * NB_ATT_CLASSES}',
+    #     convert_css=True))
+    #
+    #
+    # buf = io.StringIO(og_string)
+    # lines = buf.readlines()
+    # newlines = []
+    # for i,l in enumerate(lines):
+    #     if i == 1:
+    #         # Put instead of index line
+    #         l = "& Cause ranking   & Top cause variables \\\\\n"
+    #     if 'multirow' in l or 'end{tabular}' in l:
+    #         newlines.append("\\hline\n")
+    #     newlines.append(l)
+    #
+    # new_string = "".join(newlines)
+    # # new_string = new_string.replace("\multirow[c]{10}{*}", "\multirow[c]{10}{3cm}")
+    # print(new_string)
 
 
 def print_avgAtt(avgAtt_dfs, c_avgAtt_dfs):

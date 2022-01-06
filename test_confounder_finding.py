@@ -1,15 +1,21 @@
 # region imports etc
 import warnings
 
+import numpy as np
 import jsonargparse
 from tqdm import tqdm
 from sklearn.manifold import TSNE
 from sklearn.decomposition import PCA
 import matplotlib.pyplot as plt
 
+import requests
+import PIL
+from PIL import Image
+from io import BytesIO
+
 warnings.simplefilter(action='ignore', category=FutureWarning)
 import os, glob
-from constants import DEVLBERT_ROOT_DIR, LMDB_PATHS, MTURK_DIR, ARWEN_LMDB_PATHS, PROJECT_ROOT_DIR
+from constants import DEVLBERT_ROOT_DIR, LMDB_PATHS, MTURK_DIR, ARWEN_LMDB_PATHS, PROJECT_ROOT_DIR, STORAGE_DIR, URL_PATH
 # export PYTHONPATH=/cw/liir/NoCsBack/testliir/nathan/p1_causality/DeVLBert:$PYTHONPATH
 # os.environ['PYTHONPATH'] = f"{DEVLBERT_ROOT_DIR}:{os.environ['PYTHONPATH']}"
 
@@ -20,7 +26,6 @@ import random
 from pathlib import Path
 import numpy as np
 from pretorch_util import get_really_free_gpus
-
 myrank = 0
 os.environ['CUDA_VISIBLE_DEVICES'] = ",".join([str(i) for i in get_really_free_gpus()][myrank])
 MASTER_PORT = f'{12355 + myrank}'
@@ -36,8 +41,8 @@ from util import CLASSES, get_rank, my_maybe_print
 
 os.chdir(DEVLBERT_ROOT_DIR)
 
-from devlbert.datasets import ConceptCapLoaderTrain
-from devlbert.devlbert import BertForMultiModalPreTraining, BertConfig
+from DeVLBert.devlbert.datasets import ConceptCapLoaderTrain
+from DeVLBert.devlbert.devlbert import BertForMultiModalPreTraining, BertConfig
 from scipy.stats import hypergeom
 from time import time as t, sleep, strftime
 
@@ -50,12 +55,14 @@ TMP_DEVLBERT_PATH = Path(
     "/cw/working-gimli/nathan/devlbert_checkpunten/epoch=6-step=70588-0.3.ckpt")
 CFG_PATH = Path(DEVLBERT_ROOT_DIR, "config/bert_base_6layer_6conect.json")
 GROUND_TRUTH_PATH = Path(MTURK_DIR, 'output_mturk', 'pair_annotations_0.8_no_cfdnce_weight.tsv')
-
+MANUALLY_CHECKED_INCORRECT_RPN_IDS = ['591604074','204402773','2089931898','1514188503','1523504137'] # Especially 'window' is often incorrect
 # STATISTIC = 'mAP'
 # STATISTIC = 'avgAtt'
 
 PRETRAINED_PATH = TMP_DEVLBERT_PATH  # MY_DEVLBERT_PATH OG_DEVLBERT_PATH TMP_DEVLBERT_PATH
-
+QUAL_EXAMPLE_CLASSES = ['man','building','woman','tree','window','shirt','sky','wall','hair','head']
+CL2ID = {cl:idx for idx,cl in enumerate(CLASSES)}
+QUAL_EXAMPLE_IDS = [CL2ID[cl] for cl in QUAL_EXAMPLE_CLASSES]
 # DATASET = 'coca'
 # DATASET = 'flickr30k'
 
@@ -63,7 +70,7 @@ PRETRAINED_PATH = TMP_DEVLBERT_PATH  # MY_DEVLBERT_PATH OG_DEVLBERT_PATH TMP_DEV
 # OUT_DIR = Path(PROJECT_ROOT_DIR, f'{STATISTIC}_output_debug')
 
 BATCH_SIZE = 32
-
+NB_CAUSES = 4
 
 class RandomAPExact:
     def __init__(self):
@@ -89,6 +96,13 @@ def add_program_argparse_args(parser):
         type=str,
         # required=True,
         help="The checkpoint for which to get the mAP score.",
+    )
+    parser.add_argument(
+        "--run",
+        default='unnamed_run',
+        type=str,
+        # required=True,
+        help="Name of the run from which the checkpoint is taken",
     )
     parser.add_argument(
         "--out_dir",
@@ -117,6 +131,13 @@ def add_program_argparse_args(parser):
         # required=True,
         help="If not doing a full run, max time to iterate for",
     )
+    parser.add_argument(
+        "--batch_size",
+        default=BATCH_SIZE,
+        type=int,
+        # required=True,
+        help="If not doing a full run, max time to iterate for",
+    )
     return parser
 
 
@@ -139,7 +160,7 @@ def main_single_process(rank, world_size, run_id):
             tokenizer,
             lmdb_paths=LMDB_PATHS,
             seq_len=36,
-            batch_size=BATCH_SIZE,
+            batch_size=args.batch_size,
             predict_feature=False,
             shuffle=False,
             num_workers=0
@@ -154,7 +175,7 @@ def main_single_process(rank, world_size, run_id):
                 annotations_jsonpath='/cw/working-gimli/nathan/downstream_data/datasets/flickr30k/all_data_final_train_2014.jsonline',
                 split='train',
                 tokenizer=BertTokenizer,
-                max_seq_length=30), batch_size=BATCH_SIZE)
+                max_seq_length=30), batch_size=args.batch_size)
     else:
         raise ValueError
     # train_dataset = flickr30k_dataset
@@ -190,15 +211,29 @@ def main_single_process(rank, world_size, run_id):
     #             tokenizer,
     #             lmdb_paths=[LMDB_PATH],
     #             seq_len=36,
-    #             batch_size=BATCH_SIZE,
+    #             batch_size=args.batch_size,
     #             predict_feature=False,
     #             shuffle=False,
     #             num_workers=0,
     #             caption_path='/cw/working-arwen/nathan/features_CoCa_lmdb/caption_train.json'
     #         )
     LAST_SAVE_T = t()
+    if args.statistic == 'qual_avgAtt':
+
+        QUAL_IMAGES_DIR = Path(PROJECT_ROOT_DIR, 'qual_images')
+        import json
+        # bc2img_id = {}
+        # used_img_ids = set()
+
+        used_effect_cls = set()
+        rows = pd.DataFrame(columns=['Effect variable', 'Top cause variables', 'Scores'])
+        used_img_ids = set()
+        id2url = json.load(open(URL_PATH, 'r'))
+
+        if not os.path.exists(QUAL_IMAGES_DIR):
+            os.makedirs(QUAL_IMAGES_DIR)
     for batch_num, batch in enumerate(tqdm(train_dataset,
-                                           desc=f'Rank {rank}')):  # TODO consider whether I need to run on all 3M pairs to make my case
+                                           desc=f'Rank {rank}')):
         if args.max_t > 0:
             if t() - START_T > args.max_t:
                 print("=" * 50, "Stopping early for debugging", "=" * 50)
@@ -294,8 +329,49 @@ def main_single_process(rank, world_size, run_id):
                     print(f"Adding {CLASSES[classid]} to attentionAndCount_for_classid")
                     attentionAndCount_for_classid[classid] = {'attention': att, 'count': 1}
 
+        elif args.statistic == 'qual_avgAtt':
+            boxes_per_img = input_ids.shape[-1]
+            expanded_img_ids = [str(img_id) for img_id in image_ids.tolist() for _ in range(boxes_per_img)]
+            id2url = json.load(open(URL_PATH, 'r'))
+            # for bc, img_id in zip(max_box_classes,expanded_img_ids):
+            #     if bc in QUAL_EXAMPLE_CLASSES:
+            #         if (bc not in bc2img_id) and (img_id not in used_img_ids) and (img_id in id2url):
+            #             bc2img_id[bc] = img_id
+            #             used_img_ids.add(img_id)
+            for bc, img_id, top_cause_ids, top_cause_atts in zip(max_box_classes, expanded_img_ids,
+                                                                 sorted_causes_ids[:, :NB_CAUSES].tolist(),
+                                                                 sorted_cause_scores[:, :NB_CAUSES].tolist()):
+                if bc in QUAL_EXAMPLE_CLASSES:
+                    if (bc not in used_effect_cls) and \
+                            (img_id not in used_img_ids) and \
+                            (img_id in id2url) and \
+                            (img_id not in MANUALLY_CHECKED_INCORRECT_RPN_IDS):
+                        url = id2url[img_id]
+                        try:
+                            img = Image.open(BytesIO(requests.get(url).content))
+                        except PIL.UnidentifiedImageError:
+                            continue
+                        top_cause_classes = [CLASSES[idx] for idx in top_cause_ids]
+                        used_effect_cls.add(bc)
+                        used_img_ids.add(img_id)
+                        rows = rows.append({'Effect variable': bc, 'Top cause variables': tuple(top_cause_classes),
+                                            'Scores': tuple(top_cause_atts), 'img': img}, ignore_index=True)
 
-
+            if len(rows) < len(QUAL_EXAMPLE_CLASSES):
+                continue
+            else:
+                rows['Effect variable'] = pd.Categorical(rows['Effect variable'],
+                                                         QUAL_EXAMPLE_CLASSES)  # see https://stackoverflow.com/questions/13838405/custom-sorting-in-pandas-dataframe/27009771
+                rows = rows.sort_values(['Effect variable'])
+                for i, row in rows.iterrows():
+                    object_cls = row['Effect variable']
+                    img = row['img']
+                    img_file_name = f'{object_cls}.png'
+                    img.save(Path(QUAL_IMAGES_DIR,img_file_name))
+                    rows.loc[i,'img_file'] = img_file_name
+                rows.drop(['img'], axis=1).to_csv(Path(QUAL_IMAGES_DIR,'rows.csv'))
+                return
+                # img_array = np.array(imageio.imread(response.content).tolist())
         else:
             times = {}
             s = t()

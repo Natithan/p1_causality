@@ -30,10 +30,14 @@ import sys
 import torch
 import torch.nn.functional as F
 import torch.nn as nn
+
 import torch.multiprocessing as mp
+
 torch.multiprocessing.set_sharing_strategy('file_system')
 
+
 from pytorch_pretrained_bert.optimization import WarmupLinearSchedule
+
 
 # from parallel.parallel import DataParallelModel, DataParallelCriterion
 
@@ -44,7 +48,7 @@ from torch.optim.lr_scheduler import LambdaLR, ReduceLROnPlateau
 import devlbert.utils as utils
 import torch.distributed as dist
 from util import setup, cleanup, myprint
-
+myprint("Post-torch imports train_tasks.py")
 logging.basicConfig(
     format="%(asctime)s - %(levelname)s - %(name)s -   %(message)s",
     datefmt="%m/%d/%Y %H:%M:%S",
@@ -196,13 +200,14 @@ def main():
          join=True)
 
 def main_single_process(rank, args):
+    myprint("Entered main single process")
     args.local_rank = rank
 
     if args.local_rank == -1 or args.no_cuda:
         device = torch.device("cuda" if torch.cuda.is_available() and not args.no_cuda else "cpu")
         n_gpu = torch.cuda.device_count()
     else:
-        setup(rank=rank, world_size=args.world_size)
+        setup(rank=rank, world_size=args.world_size,tasks=args.tasks)
         torch.cuda.set_device(args.local_rank)
         device = torch.device("cuda", args.local_rank)
         n_gpu = 1

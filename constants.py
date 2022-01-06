@@ -7,6 +7,7 @@ CHECKPOINT_FREQUENCY = 1000
 hostname = socket.gethostname()
 CKPT_DIR_NAME = 'devlbert_checkpunten'
 VSC_BIGSTORAGE_ROOT_DIR = "/scratch/leuven/336/vsc33642"
+VSC_CORE_ROOT_DIR="/data/leuven/336/vsc33642/"
 if hostname == 'sceps':  # GCP:
     CORE_ROOT_DIR = "/home/nathan_e_d_cornille_gmail_com"
     DATA_ROOT_DIR = "/mnt/disks/concap"  #
@@ -31,7 +32,7 @@ elif hostname == 'DESKTOP-2HMIDLO': # local PC
 else:  # VSC
     print(hostname)
     BIGSTORAGE_ROOT_DIR = VSC_BIGSTORAGE_ROOT_DIR
-    CORE_ROOT_DIR = "/data/leuven/336/vsc33642/"
+    CORE_ROOT_DIR = VSC_CORE_ROOT_DIR
     DATA_ROOT_DIR = f"{BIGSTORAGE_ROOT_DIR}/features_CoCa_lmdb"
     MODEL_CKPT_DIR = f"{BIGSTORAGE_ROOT_DIR}/{CKPT_DIR_NAME}"
     HOST = 'VSC'

@@ -15,8 +15,9 @@ from torch import distributed as dist
 import torch
 from constants import DEVLBERT_ROOT_DIR, HOST
 from pretorch_util import rank_to_device
-from tools.DownloadConcptualCaption.download_data import _file_name
+from DeVLBert.tools.DownloadConcptualCaption.download_data import _file_name
 from pytorch_lightning.utilities.xla_device import XLADeviceUtils
+
 
 def is_on_tpus() -> bool:
     return XLADeviceUtils.tpu_device_exists()
@@ -51,7 +52,6 @@ def my_maybe_print(*msg):
     pass
     # pre_msg = _get_pre_msg()
     # print(pre_msg, *msg)
-
 
 
 def _get_pre_msg():
@@ -143,12 +143,31 @@ def is_master_rank() -> bool:
     return get_rank() == 0
 
 
-def setup(rank, world_size):
-    os.environ['MASTER_ADDR'] = 'localhost'
-    os.environ['MASTER_PORT'] = '12356'
 
-    # initialize the process group
+
+def setup(rank, world_size,tasks=None):
+    os.environ['MASTER_ADDR'] = 'localhost'
+    if not tasks is None:
+        print(tasks)
+        if '0' in tasks:
+            os.environ['MASTER_PORT'] = '12365'
+        else:
+            os.environ['MASTER_PORT'] = '12366'
+    else:
+        os.environ['MASTER_PORT'] = '1236z5'
+
+    print("*" * 100, os.environ['MASTER_PORT'], rank, world_size, "*" * 100)
     dist.init_process_group("nccl", rank=rank, world_size=world_size)
+
+    # # initialize the process group
+    # try:
+    #     print(os.environ['MASTER_PORT'],rank,world_size)
+    #     dist.init_process_group("nccl", rank=rank, world_size=world_size)
+    # except RuntimeError:
+    #     print("SWITCHING MASTER PORT, ALREADY IN USE")
+    #     os.environ['MASTER_PORT'] = '12356'
+    #     print(os.environ['MASTER_PORT'],rank,world_size)
+    #     dist.init_process_group("nccl", rank=rank, world_size=world_size)
 
 
 def cleanup():
@@ -161,6 +180,7 @@ def sz(num, suffix='B'):
             return "%3.1f%s%s" % (num, unit, suffix)
         num /= 1024.0
     return "%.1f%s%s" % (num, 'Yi', suffix)
+
 
 def print_gpu_mem():
     if HOST == 'VSC':

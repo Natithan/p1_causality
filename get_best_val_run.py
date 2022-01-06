@@ -7,7 +7,7 @@ import glob
 import argparse
 
 from constants import PROJECT_ROOT_DIR, MINI_FT_EPOCHS, BIGSTORAGE_ROOT_DIR, VSC_BIGSTORAGE_ROOT_DIR
-
+LOGS_DIR = f'{PROJECT_ROOT_DIR}/vsc_batch_terminal/after_pretrain'
 ALL_RUN_NAMES = [
         'gimli_1',
         'gimli_2',
@@ -31,7 +31,10 @@ ir_log_files = {
     # 'vilbert': f'{PROJECT_ROOT_DIR}/vsc_batch_terminal/after_pretrain/ir_vilbert.o50778570',
     # 'dependent_prior': f'{PROJECT_ROOT_DIR}/vsc_batch_terminal/after_pretrain/ir_dependent_prior.o50783046',
     'dependent_prior': f'{PROJECT_ROOT_DIR}/vsc_batch_terminal/after_pretrain/ir_dependent_prior.o50964074',
-    'dv7': f'{PROJECT_ROOT_DIR}/vsc_batch_terminal/after_pretrain/ir_dv7.o50963490',
+    'dv7': f'{LOGS_DIR}/ir_dv7.o50963490',
+    'vilbert_3': os.path.join(LOGS_DIR,'ir_vilbert_3.o50964685'),
+    'v5': os.path.join(LOGS_DIR,'ir_v5.o50964736'),
+    'no_prior': os.path.join(LOGS_DIR,'ir_no_prior.o50965073'),
 }
 vqa_log_files = {
     # 'gimli_1': f'{PROJECT_ROOT_DIR}/vsc_batch_terminal/after_pretrain/vqa_gimli_1.o50775713',
@@ -66,6 +69,9 @@ def add_program_argparse_args(parser):
     parser.add_argument(
         "--mini", action="store_true", help="Whether working with a mini-debugging setup"
     )
+    parser.add_argument(
+        "--usedotlog", action="store_true", help="Whether need to look at .log file instead of .o* file"
+    )
     return parser
 
 def main():
@@ -77,9 +83,9 @@ def main():
             for m in ['ir','vqa']:
                 print_path_for_run_name(r, m)
     else:
-        print_path_for_run_name(args.run_name, args.metric, args.tmp_file, args.mini)
+        print_path_for_run_name(args.run_name, args.metric, args.tmp_file, args.mini,args.usedotlog)
 
-def get_log_file_path(run_name,metric,mini=False):
+def get_log_file_path(run_name,metric,mini=False,usedotlog=False):
     if metric == 'ir':
         log_files = ir_log_files
     elif metric == 'vqa':
@@ -90,7 +96,8 @@ def get_log_file_path(run_name,metric,mini=False):
         p = log_files[run_name]
     else:
         mini_prefix = "" if not mini else "mini_"
-        path_search_string = f'{PROJECT_ROOT_DIR}/vsc_batch_terminal/after_pretrain/{mini_prefix}{metric}_{run_name}.o*'
+        end = ".o*" if not usedotlog else ".log"
+        path_search_string = f'{PROJECT_ROOT_DIR}/vsc_batch_terminal/after_pretrain/{mini_prefix}{metric}_{run_name}{end}'
         paths = glob.glob(path_search_string)
         print(f"Searching for latest log file matching {path_search_string}")
         latest_file = max(paths, key=os.path.getctime)
@@ -109,9 +116,9 @@ def distort_log_line(line):
         print("Not distorting line")
         return line
 
-def print_path_for_run_name(run_name, metric, tmp_file=None,mini=False):
+def print_path_for_run_name(run_name, metric, tmp_file=None,mini=False,usedotlog=False):
     # p = log_files[run_name]
-    p = get_log_file_path(run_name,metric,mini)
+    p = get_log_file_path(run_name,metric,mini,usedotlog)
     ckpt_path_lines = []
     val_score_lines = []
     world_size_found = False

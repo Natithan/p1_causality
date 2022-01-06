@@ -831,13 +831,6 @@ def main_pl():
         args.trainer.min_epochs = args.trainer.max_epochs = args.exact_epochs
         myprint(f"Training for exactly {args.exact_epochs} epochs")
 
-    if args.mystepresume:
-        list_of_ckpt = glob.glob(f'{args.output_dir}/epoch=*.ckpt')  # * means all if need specific format then *.csv
-        if len(list_of_ckpt) != 0:
-            # print(list_of_ckpt)
-            latest_ckpt = max(list_of_ckpt, key=os.path.getctime)
-            # print(latest_ckpt)
-            args.trainer.resume_from_checkpoint = latest_ckpt
     logger.info(yaml.dump(args))
 
     # region Getting BertConfig and tweaking it based on args
@@ -890,6 +883,15 @@ def main_pl():
             myprint(f"Loading pt1 checkpoint from {f'{args.output_dir}/epoch=*{PT1_REGION_MASK_PROB}.ckpt'}")
             latest_pt1_ckpt = max(list_of_pt1_ckpts, key=os.path.getctime)
             model = BertForMultiModalPreTraining.load_from_checkpoint(latest_pt1_ckpt, config=config, args=args)
+    else:
+        if args.mystepresume:
+            list_of_ckpt = glob.glob(
+                f'{args.output_dir}/epoch=*.ckpt')  # * means all if need specific format then *.csv
+            if len(list_of_ckpt) != 0:
+                # print(list_of_ckpt)
+                latest_ckpt = max(list_of_ckpt, key=os.path.getctime)
+                # print(latest_ckpt)
+                args.trainer.resume_from_checkpoint = latest_ckpt
 
     lr_monitor = LearningRateMonitor(logging_interval='step')
     checkpoint_filename = f'{{epoch}}-{{step}}-{args.region_mask_prob}'
